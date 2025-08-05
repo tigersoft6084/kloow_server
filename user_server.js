@@ -1,0 +1,243 @@
+const express = require('express');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const { exec } = require('child_process');
+const jwt = require('jsonwebtoken');
+
+const db = require('./database');
+const { verifyToken, fetchUserData, JWT_SECRET, JWT_REFRESH_SECRET } = require('./common');
+
+const app = express();
+const PORT = 3001;
+
+// Middleware
+app.use(bodyParser.json({ limit: '1kb' })); // Limit payload size for security
+app.use(
+  cors({
+    origin: 'http://46.62.137.213:3000', // Adjust to your frontend's domain/port
+    credentials: true
+  })
+);
+app.use((req, _res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} request to ${req.path}`);
+  next();
+});
+
+// Create a router
+const apiRouter = express.Router();
+
+// Updated login endpoint to return JWT tokens in response
+apiRouter.post('/login', async (req, res) => {
+  try {
+    const { log, pwd } = req.body;
+
+    if (!log || !pwd) {
+      return res.status(400).json({ message: 'Missing required fields: username or password' });
+    }
+
+    const servers = await new Promise((resolve, reject) => {
+      db.all('SELECT domain, membership_key FROM servers where is_active = 1', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
+    });
+
+    let result = null;
+
+    for (const server of servers) {
+      const { domain, membership_key } = server;
+      if (domain && membership_key) {
+        const maserverResult = await fetchUserData(log, pwd, domain, membership_key);
+        if (maserverResult.success) {
+          const { uid, username, server, membership_expire_time } = maserverResult.user;
+
+          // Generate access token
+          const accessToken = jwt.sign({ uid, username, server, membership_expire_time }, JWT_SECRET, { expiresIn: '15m' });
+
+          // Generate refresh token
+          const refreshToken = jwt.sign({ uid, username, server, membership_expire_time }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+          result = {
+            authentication_success: true,
+            accessToken,
+            refreshToken,
+            user: { uid, username, server, membership_expire_time }
+          };
+        }
+      }
+    }
+    if (result) {
+      res.json(result);
+    } else {
+      res.status(404).json({ message: 'Invalid credentials' });
+    }
+  } catch (error) {
+    console.error('Login message:', error);
+    res.status(500).json({ message: 'Server error during authentication' });
+  }
+});
+
+// Updated refresh token endpoint to accept refresh token in body and return new access token
+apiRouter.post('/refresh-token', async (req, res) => {
+  const { refreshToken } = req.body;
+
+  if (!refreshToken) {
+    return res.status(400).json({ message: 'No refresh token provided' });
+  }
+
+  try {
+    const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+
+    const { uid, username, server, membership_expire_time } = decoded;
+
+    if (new Date(membership_expire_time) < new Date()) {
+      return res.status(403).json({ message: 'Membership is expired. Please renew your subscription.' });
+    }
+
+    // Generate new access token
+    const newAccessToken = jwt.sign({ uid, username, server, membership_expire_time }, JWT_SECRET, { expiresIn: '15m' });
+
+    res.json({
+      authentication_success: true,
+      accessToken: newAccessToken,
+      user: { uid, username, server, membership_expire_time }
+    });
+  } catch (error) {
+    console.error('Refresh token verification message:', error);
+    res.status(402).json({ message: 'Invalid or expired refresh token' });
+  }
+});
+
+// App list endpoint
+apiRouter.post('/app_list', verifyToken, async (req, res) => {
+  try {
+    const { username, server } = req.user;
+    const { rootUrl } = req.body;
+
+    if (!rootUrl) {
+      return res.status(400).json({ message: 'Missing required field: rootUrl' });
+    }
+
+    const response = await fetch('https://herzliyaserver.click/api/apps/get-apps', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ rootUrl })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const appList = (data.appList || []).map((app) => {
+      return { ...app, port: 0 };
+    });
+
+    db.all('SELECT * FROM containers WHERE username = ? and auth_server = ? and port != ?', [username, server, 0], (err, rows) => {
+      if (err) return res.status(500).json({ message: err.message });
+      appList.forEach((app) => (app.port = rows.find((row) => row.project_id === app.id)?.port || 0));
+      res.json({ appList });
+    });
+  } catch (error) {
+    console.error(`Error fetching app list: ${error.message}`);
+    res.status(500).json({ message: 'Failed to fetch app list' });
+  }
+});
+
+// Run app endpoint
+apiRouter.post('/run_app', verifyToken, async (req, res) => {
+  try {
+    const { id, url, proxyServer } = req.body;
+    const { username, server } = req.user;
+    const { default: getPort, portNumbers } = await import('get-port');
+    const port = await getPort({ port: portNumbers(10000, 32767) });
+
+    db.get(
+      'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
+      [username, server, id, 0],
+      (err, row) => {
+        if (err) return res.status(500).json({ message: err.message });
+        if (row) return res.status(500).json({ message: 'This application is already running.' });
+
+        exec(
+          `./kasm/run.sh ${[`${username}-${server}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, port].join(' ')}`,
+          (error, stdout, stderr) => {
+            if (error) return res.status(500).json({ message: error.message });
+
+            db.get(
+              'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port = ?',
+              [username, server, id, 0],
+              (err, row) => {
+                if (err) return res.status(500).json({ message: err.message });
+                if (row) {
+                  db.run('UPDATE containers SET container_id = ?, port = ? WHERE id = ?', [stdout.trim(), port, row.id], (err) => {
+                    if (err) return res.status(500).json({ message: err.message });
+                    res.json({ success: true, port });
+                  });
+                } else {
+                  db.run(
+                    'INSERT INTO containers (username, auth_server, project_id, container_id, port) VALUES (?, ?, ?, ?, ?)',
+                    [username, server, id, stdout.trim(), port],
+                    (err) => {
+                      if (err) return res.status(500).json({ message: err.message });
+                      res.json({ success: true, port });
+                    }
+                  );
+                }
+              }
+            );
+          }
+        );
+      }
+    );
+  } catch (error) {
+    console.error(`Error run app: ${error.message}`);
+    res.status(500).json({ message: 'Failed to run app' });
+  }
+});
+
+// Stop app endpoint
+apiRouter.post('/stop_app', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.body;
+    const { username, server } = req.user;
+    db.get(
+      'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
+      [username, server, id, 0],
+      (err, row) => {
+        if (err) return res.status(500).json({ message: err.message });
+        if (!row) return res.status(404).json({ message: 'Application not found' });
+
+        exec(`./kasm/stop.sh ${row.container_id}`, (error, stdout, stderr) => {
+          if (error) {
+            console.error(`Error stopping app: ${error.message}`);
+            return res.status(500).json({ message: `Error stopping app: ${error.message}` });
+          }
+
+          db.run('UPDATE containers SET port = ? WHERE id = ?', [0, row.id], (err) => {
+            if (err) return res.status(500).json({ message: err.message });
+            res.json({ success: true });
+          });
+        });
+      }
+    );
+  } catch (error) {
+    console.error(`Error stop app: ${error.message}`);
+    res.status(500).json({ message: 'Failed to stop app' });
+  }
+});
+
+// Mount the router with the prefix
+app.use('/api/v1', apiRouter);
+
+// Error handling middleware
+app.use((err, _req, res, _next) => {
+  console.error(`Unhandled message: ${err.message}`);
+  res.status(500).json({ message: 'Internal server error' });
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Proxy server running on http://localhost:${PORT}`);
+});

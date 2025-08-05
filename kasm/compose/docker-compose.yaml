@@ -1,0 +1,10 @@
+services:
+  chrome:
+    image: kasmweb-chrome:latest
+    ports:
+      - "6901:6901"
+    environment:
+      VNC_PW: "password"
+      VNCOPTIONS: "-disableBasicAuth"
+      STARTUP_CMD: "google-chrome --no-sandbox --start-maximized"
+    shm_size: 2g
