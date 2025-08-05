@@ -222,7 +222,6 @@ const updateFunction = async (domain, username, password) => {
 
 const fetchUserData = async (log, pwd, domain, membership_key) => {
   try {
-    // Step 1: Authenticate with maserver
     const loginResponse = await fetch(`https://${domain}/wp-json/custom/v1/login/`, {
       method: 'POST',
       headers: {
@@ -254,7 +253,6 @@ const fetchUserData = async (log, pwd, domain, membership_key) => {
       user: {
         uid: loginResult.data.uid,
         username: log,
-        server: 'maserver',
         membership_expire_time: membership?.expire_time || null
       }
     };

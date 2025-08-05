@@ -49,18 +49,18 @@ apiRouter.post('/login', async (req, res) => {
       if (domain && membership_key) {
         const maserverResult = await fetchUserData(log, pwd, domain, membership_key);
         if (maserverResult.success) {
-          const { uid, username, server, membership_expire_time } = maserverResult.user;
+          const { uid, username, membership_expire_time } = maserverResult.user;
 
           // Generate access token
-          const accessToken = jwt.sign({ uid, username, server, membership_expire_time }, JWT_SECRET, { expiresIn: '15m' });
+          const accessToken = jwt.sign({ uid, username, domain, membership_expire_time }, JWT_SECRET, { expiresIn: '15m' });
 
           // Generate refresh token
-          const refreshToken = jwt.sign({ uid, username, server, membership_expire_time }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+          const refreshToken = jwt.sign({ uid, username, domain, membership_expire_time }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
           result = {
             authentication_success: true,
             accessToken,
             refreshToken,
-            user: { uid, username, server, membership_expire_time }
+            user: { uid, username, domain, membership_expire_time }
           };
         }
       }
@@ -87,19 +87,19 @@ apiRouter.post('/refresh-token', async (req, res) => {
   try {
     const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
 
-    const { uid, username, server, membership_expire_time } = decoded;
+    const { uid, username, domain, membership_expire_time } = decoded;
 
     if (new Date(membership_expire_time) < new Date()) {
       return res.status(403).json({ message: 'Membership is expired. Please renew your subscription.' });
     }
 
     // Generate new access token
-    const newAccessToken = jwt.sign({ uid, username, server, membership_expire_time }, JWT_SECRET, { expiresIn: '15m' });
+    const newAccessToken = jwt.sign({ uid, username, domain, membership_expire_time }, JWT_SECRET, { expiresIn: '15m' });
 
     res.json({
       authentication_success: true,
       accessToken: newAccessToken,
-      user: { uid, username, server, membership_expire_time }
+      user: { uid, username, domain, membership_expire_time }
     });
   } catch (error) {
     console.error('Refresh token verification message:', error);
@@ -108,21 +108,16 @@ apiRouter.post('/refresh-token', async (req, res) => {
 });
 
 // App list endpoint
-apiRouter.post('/app_list', verifyToken, async (req, res) => {
+apiRouter.get('/app_list', verifyToken, async (req, res) => {
   try {
-    const { username, server } = req.user;
-    const { rootUrl } = req.body;
+    const { username, domain } = req.user;
 
-    if (!rootUrl) {
-      return res.status(400).json({ message: 'Missing required field: rootUrl' });
-    }
-
-    const response = await fetch('https://herzliyaserver.click/api/apps/get-apps', {
+    const response = await fetch('https://debicaserver.click/api/apps/get-apps', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ rootUrl })
+      body: JSON.stringify({ rootUrl: domain })
     });
 
     if (!response.ok) {
@@ -134,7 +129,7 @@ apiRouter.post('/app_list', verifyToken, async (req, res) => {
       return { ...app, port: 0 };
     });
 
-    db.all('SELECT * FROM containers WHERE username = ? and auth_server = ? and port != ?', [username, server, 0], (err, rows) => {
+    db.all('SELECT * FROM containers WHERE username = ? and auth_server = ? and port != ?', [username, domain, 0], (err, rows) => {
       if (err) return res.status(500).json({ message: err.message });
       appList.forEach((app) => (app.port = rows.find((row) => row.project_id === app.id)?.port || 0));
       res.json({ appList });
@@ -149,25 +144,25 @@ apiRouter.post('/app_list', verifyToken, async (req, res) => {
 apiRouter.post('/run_app', verifyToken, async (req, res) => {
   try {
     const { id, url, proxyServer } = req.body;
-    const { username, server } = req.user;
+    const { username, domain } = req.user;
     const { default: getPort, portNumbers } = await import('get-port');
     const port = await getPort({ port: portNumbers(10000, 32767) });
 
     db.get(
       'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
-      [username, server, id, 0],
+      [username, domain, id, 0],
       (err, row) => {
         if (err) return res.status(500).json({ message: err.message });
         if (row) return res.status(500).json({ message: 'This application is already running.' });
 
         exec(
-          `./kasm/run.sh ${[`${username}-${server}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, port].join(' ')}`,
+          `./kasm/run.sh ${[`${username}-${domain}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, port].join(' ')}`,
           (error, stdout, stderr) => {
             if (error) return res.status(500).json({ message: error.message });
 
             db.get(
               'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port = ?',
-              [username, server, id, 0],
+              [username, domain, id, 0],
               (err, row) => {
                 if (err) return res.status(500).json({ message: err.message });
                 if (row) {
@@ -178,7 +173,7 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
                 } else {
                   db.run(
                     'INSERT INTO containers (username, auth_server, project_id, container_id, port) VALUES (?, ?, ?, ?, ?)',
-                    [username, server, id, stdout.trim(), port],
+                    [username, domain, id, stdout.trim(), port],
                     (err) => {
                       if (err) return res.status(500).json({ message: err.message });
                       res.json({ success: true, port });
@@ -201,10 +196,10 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
 apiRouter.post('/stop_app', verifyToken, async (req, res) => {
   try {
     const { id } = req.body;
-    const { username, server } = req.user;
+    const { username, domain } = req.user;
     db.get(
       'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
-      [username, server, id, 0],
+      [username, domain, id, 0],
       (err, row) => {
         if (err) return res.status(500).json({ message: err.message });
         if (!row) return res.status(404).json({ message: 'Application not found' });
