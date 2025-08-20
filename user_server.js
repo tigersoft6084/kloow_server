@@ -5,7 +5,7 @@ const { exec } = require('child_process');
 const jwt = require('jsonwebtoken');
 
 const db = require('./database');
-const { verifyToken, fetchUserData, JWT_SECRET, JWT_REFRESH_SECRET } = require('./common');
+const { verifyToken, fetchUserData, hashId, JWT_SECRET, JWT_REFRESH_SECRET } = require('./common');
 
 const app = express();
 const PORT = 3001;
@@ -35,14 +35,14 @@ apiRouter.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Missing required fields: username or password' });
     }
 
-    const servers = await new Promise((resolve, reject) => {
-      db.all('SELECT domain, membership_key FROM servers where is_active = 1', [], (err, rows) => {
+    let result = null;
+
+    let servers = await new Promise((resolve, reject) => {
+      db.all('SELECT domain, membership_key FROM servers where is_active = 1 and type = "wordpress"', [], (err, rows) => {
         if (err) reject(err);
         resolve(rows);
       });
     });
-
-    let result = null;
 
     for (const server of servers) {
       const { domain, membership_key } = server;
@@ -52,19 +52,68 @@ apiRouter.post('/login', async (req, res) => {
           const { uid, username, membership_expire_time } = maserverResult.user;
 
           // Generate access token
-          const accessToken = jwt.sign({ uid, username, domain, membership_expire_time }, JWT_SECRET, { expiresIn: '15m' });
+          const accessToken = jwt.sign({ uid, username, domain, membership_expire_time, type: 'wordpress' }, JWT_SECRET, {
+            expiresIn: '15m'
+          });
 
           // Generate refresh token
-          const refreshToken = jwt.sign({ uid, username, domain, membership_expire_time }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+          const refreshToken = jwt.sign({ uid, username, domain, membership_expire_time, type: 'wordpress' }, JWT_REFRESH_SECRET, {
+            expiresIn: '7d'
+          });
           result = {
             authentication_success: true,
             accessToken,
             refreshToken,
-            user: { uid, username, domain, membership_expire_time }
+            user: { uid, username, domain, membership_expire_time, type: 'wordpress' }
           };
         }
       }
     }
+    if (result) {
+      res.json(result);
+      return;
+    }
+
+    servers = await new Promise((resolve, reject) => {
+      db.all('SELECT domain FROM servers where is_active = 1 and type = "nextjs"', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
+    });
+
+    for (const server of servers) {
+      const { domain } = server;
+      if (domain) {
+        const loginResponse = await fetch(`https://${domain}/api/users/login`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ email: log, password: pwd })
+        });
+        const loginResult = await loginResponse.json();
+        console.log(loginResult);
+        if (loginResult?.token) {
+          const uid = loginResult?.user?.id;
+          const username = log;
+          const membership_expire_time = '2100-12-31 23:59:59';
+          // Generate access token
+          const accessToken = jwt.sign({ uid, username, domain, membership_expire_time, type: 'nextjs' }, JWT_SECRET, { expiresIn: '15m' });
+
+          // Generate refresh token
+          const refreshToken = jwt.sign({ uid, username, domain, membership_expire_time, type: 'nextjs' }, JWT_REFRESH_SECRET, {
+            expiresIn: '7d'
+          });
+          result = {
+            authentication_success: true,
+            accessToken,
+            refreshToken,
+            user: { uid, username, domain, membership_expire_time, type: 'nextjs' }
+          };
+        }
+      }
+    }
+
     if (result) {
       res.json(result);
     } else {
@@ -87,19 +136,19 @@ apiRouter.post('/refresh-token', async (req, res) => {
   try {
     const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
 
-    const { uid, username, domain, membership_expire_time } = decoded;
+    const { uid, username, domain, membership_expire_time, type } = decoded;
 
     if (new Date(membership_expire_time) < new Date()) {
       return res.status(403).json({ message: 'Membership is expired. Please renew your subscription.' });
     }
 
     // Generate new access token
-    const newAccessToken = jwt.sign({ uid, username, domain, membership_expire_time }, JWT_SECRET, { expiresIn: '15m' });
+    const newAccessToken = jwt.sign({ uid, username, domain, membership_expire_time, type }, JWT_SECRET, { expiresIn: '15m' });
 
     res.json({
       authentication_success: true,
       accessToken: newAccessToken,
-      user: { uid, username, domain, membership_expire_time }
+      user: { uid, username, domain, membership_expire_time, type }
     });
   } catch (error) {
     console.error('Refresh token verification message:', error);
@@ -110,14 +159,14 @@ apiRouter.post('/refresh-token', async (req, res) => {
 // App list endpoint
 apiRouter.get('/app_list', verifyToken, async (req, res) => {
   try {
-    const { username, domain } = req.user;
+    const { username, domain, type } = req.user;
 
     const response = await fetch('https://debicaserver.click/api/apps/get-apps', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ rootUrl: domain })
+      body: JSON.stringify({ rootUrl: type === 'wordpress' ? domain : null })
     });
 
     if (!response.ok) {
@@ -129,7 +178,7 @@ apiRouter.get('/app_list', verifyToken, async (req, res) => {
       return { ...app, port: 0 };
     });
 
-    db.all('SELECT * FROM containers WHERE username = ? and auth_server = ? and port != ?', [username, domain, 0], (err, rows) => {
+    db.all('SELECT * FROM containers WHERE username = ? and auth_server = ? and port != ?', [hashId(username), domain, 0], (err, rows) => {
       if (err) return res.status(500).json({ message: err.message });
       appList.forEach((app) => (app.port = rows.find((row) => row.project_id === app.id)?.port || 0));
       res.json({ appList });
@@ -150,19 +199,19 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
 
     db.get(
       'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
-      [username, domain, id, 0],
+      [hashId(username), domain, id, 0],
       (err, row) => {
         if (err) return res.status(500).json({ message: err.message });
         if (row) return res.status(500).json({ message: 'This application is already running.' });
 
         exec(
-          `./kasm/run.sh ${[`${username}-${domain}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, port].join(' ')}`,
+          `./kasm/run.sh ${[`${hashId(username)}-${domain}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, port].join(' ')}`,
           (error, stdout, stderr) => {
             if (error) return res.status(500).json({ message: error.message });
 
             db.get(
               'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port = ?',
-              [username, domain, id, 0],
+              [hashId(username), domain, id, 0],
               (err, row) => {
                 if (err) return res.status(500).json({ message: err.message });
                 if (row) {
@@ -173,7 +222,7 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
                 } else {
                   db.run(
                     'INSERT INTO containers (username, auth_server, project_id, container_id, port) VALUES (?, ?, ?, ?, ?)',
-                    [username, domain, id, stdout.trim(), port],
+                    [hashId(username), domain, id, stdout.trim(), port],
                     (err) => {
                       if (err) return res.status(500).json({ message: err.message });
                       res.json({ success: true, port });
@@ -199,7 +248,7 @@ apiRouter.post('/stop_app', verifyToken, async (req, res) => {
     const { username, domain } = req.user;
     db.get(
       'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
-      [username, domain, id, 0],
+      [hashId(username), domain, id, 0],
       (err, row) => {
         if (err) return res.status(500).json({ message: err.message });
         if (!row) return res.status(404).json({ message: 'Application not found' });

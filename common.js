@@ -2,6 +2,7 @@ const setCookie = require('set-cookie-parser');
 const { load } = require('cheerio');
 const { stringify } = require('qs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
 const JWT_SECRET = 'proxyservicejwttoken';
 const JWT_REFRESH_SECRET = 'proxyservicejwtrefreshtoken';
@@ -261,4 +262,8 @@ const fetchUserData = async (log, pwd, domain, membership_key) => {
   }
 };
 
-module.exports = { verifyToken, updateFunction, fetchUserData, JWT_SECRET, JWT_REFRESH_SECRET };
+const hashId = (id) => {
+  return crypto.createHash('md5').update(id).digest('hex');
+};
+
+module.exports = { verifyToken, updateFunction, fetchUserData, hashId, JWT_SECRET, JWT_REFRESH_SECRET };
