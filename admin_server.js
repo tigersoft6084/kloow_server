@@ -100,9 +100,9 @@ apiRouter.post('/servers', verifyToken, async (req, res) => {
     return res.status(403).json({ message: 'Admin access required' });
   }
 
-  const { domain, username, password, membership_key } = req.body;
-  if (!domain || !username || !password || !membership_key) {
-    return res.status(400).json({ message: 'Domain, username, password, and membership api key required' });
+  const { domain, username, password, membership_key, type } = req.body;
+  if (!domain || !username || !password || !membership_key || !type) {
+    return res.status(400).json({ message: 'Domain, username, password, membership api key, and type required' });
   }
 
   try {
@@ -116,15 +116,16 @@ apiRouter.post('/servers', verifyToken, async (req, res) => {
     if (server) {
       return res.status(400).json({ message: 'Server with this domain already exists' });
     }
-
-    const result = await updateFunction(domain, username, password);
-    if (!result.status) {
-      return res.status(500).json({ message: result.message });
+    if (type === 'wordpress') {
+      const result = await updateFunction(domain, username, password);
+      if (!result.status) {
+        return res.status(500).json({ message: result.message });
+      }
     }
     await new Promise((resolve, reject) => {
       db.run(
-        'INSERT INTO servers (domain, username, password, membership_key) VALUES (?, ?, ?, ?)',
-        [domain, username, password, membership_key],
+        'INSERT INTO servers (domain, username, password, membership_key, type) VALUES (?, ?, ?, ?, ?)',
+        [domain, username, password, membership_key, type],
         (err) => {
           if (err) reject(err);
           resolve();
@@ -132,10 +133,14 @@ apiRouter.post('/servers', verifyToken, async (req, res) => {
       );
     });
     const servers = await new Promise((resolve, reject) => {
-      db.all('SELECT id, domain, username, password, membership_key, is_active, created_at, updated_at FROM servers', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
+      db.all(
+        'SELECT id, domain, username, password, membership_key, type, is_active, created_at, updated_at FROM servers',
+        [],
+        (err, rows) => {
+          if (err) reject(err);
+          resolve(rows);
+        }
+      );
     });
     res.status(201).json({ message: 'Server added successfully', servers });
   } catch (error) {
@@ -192,10 +197,14 @@ apiRouter.put('/servers/:id', verifyToken, async (req, res) => {
     });
 
     const servers = await new Promise((resolve, reject) => {
-      db.all('SELECT id, domain, username, password, membership_key, is_active, created_at, updated_at FROM servers', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
+      db.all(
+        'SELECT id, domain, username, password, membership_key, type, is_active, created_at, updated_at FROM servers',
+        [],
+        (err, rows) => {
+          if (err) reject(err);
+          resolve(rows);
+        }
+      );
     });
     res.json({ message: 'Server updated successfully', servers });
   } catch (error) {
@@ -220,10 +229,14 @@ apiRouter.delete('/servers/:id', verifyToken, async (req, res) => {
       });
     });
     const servers = await new Promise((resolve, reject) => {
-      db.all('SELECT id, domain, username, password, membership_key, is_active, created_at, updated_at FROM servers', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
+      db.all(
+        'SELECT id, domain, username, password, membership_key, type, is_active, created_at, updated_at FROM servers',
+        [],
+        (err, rows) => {
+          if (err) reject(err);
+          resolve(rows);
+        }
+      );
     });
     res.json({ message: 'Server deleted successfully', servers });
   } catch (error) {
@@ -236,10 +249,14 @@ apiRouter.delete('/servers/:id', verifyToken, async (req, res) => {
 apiRouter.get('/servers', verifyToken, async (req, res) => {
   try {
     const servers = await new Promise((resolve, reject) => {
-      db.all('SELECT id, domain, username, password, membership_key, is_active, created_at, updated_at FROM servers', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
+      db.all(
+        'SELECT id, domain, username, password, membership_key, type, is_active, created_at, updated_at FROM servers',
+        [],
+        (err, rows) => {
+          if (err) reject(err);
+          resolve(rows);
+        }
+      );
     });
     res.json({ servers });
   } catch (error) {

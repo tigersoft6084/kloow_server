@@ -58,6 +58,7 @@ db.serialize(() => {
           username TEXT NOT NULL,
           password TEXT NOT NULL,
           membership_key TEXT NOT NULL,
+          type TEXT NOT NULL,
           is_active INTEGER DEFAULT 1,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
