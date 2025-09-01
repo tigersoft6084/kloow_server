@@ -49,26 +49,26 @@ apiRouter.post('/login', async (req, res) => {
       if (domain && membership_key) {
         const maserverResult = await fetchUserData(log, pwd, domain, membership_key);
         if (maserverResult.success) {
-          const { uid, username, membership_expire_time } = maserverResult.user;
-
+          const { uid, username, role, membership_expire_time } = maserverResult.user;
           // Generate access token
-          const accessToken = jwt.sign({ uid, username, domain, membership_expire_time, type: 'wordpress' }, JWT_SECRET, {
+          const accessToken = jwt.sign({ uid, username, role, domain, membership_expire_time, type: 'wordpress' }, JWT_SECRET, {
             expiresIn: '15m'
           });
 
           // Generate refresh token
-          const refreshToken = jwt.sign({ uid, username, domain, membership_expire_time, type: 'wordpress' }, JWT_REFRESH_SECRET, {
+          const refreshToken = jwt.sign({ uid, username, role, domain, membership_expire_time, type: 'wordpress' }, JWT_REFRESH_SECRET, {
             expiresIn: '7d'
           });
           result = {
             authentication_success: true,
             accessToken,
             refreshToken,
-            user: { uid, username, domain, membership_expire_time, type: 'wordpress' }
+            user: { uid, username, role, domain, membership_expire_time, type: 'wordpress' }
           };
         }
       }
     }
+
     if (result) {
       res.json(result);
       return;
@@ -91,24 +91,31 @@ apiRouter.post('/login', async (req, res) => {
           },
           body: JSON.stringify({ email: log, password: pwd })
         });
+
         const loginResult = await loginResponse.json();
-        console.log(loginResult);
+
         if (loginResult?.token) {
           const uid = loginResult?.user?.id;
           const username = log;
           const membership_expire_time = '2100-12-31 23:59:59';
           // Generate access token
-          const accessToken = jwt.sign({ uid, username, domain, membership_expire_time, type: 'nextjs' }, JWT_SECRET, { expiresIn: '15m' });
+          const accessToken = jwt.sign({ uid, username, role: 'user', domain, membership_expire_time, type: 'nextjs' }, JWT_SECRET, {
+            expiresIn: '15m'
+          });
 
           // Generate refresh token
-          const refreshToken = jwt.sign({ uid, username, domain, membership_expire_time, type: 'nextjs' }, JWT_REFRESH_SECRET, {
-            expiresIn: '7d'
-          });
+          const refreshToken = jwt.sign(
+            { uid, username, role: 'user', domain, membership_expire_time, type: 'nextjs' },
+            JWT_REFRESH_SECRET,
+            {
+              expiresIn: '7d'
+            }
+          );
           result = {
             authentication_success: true,
             accessToken,
             refreshToken,
-            user: { uid, username, domain, membership_expire_time, type: 'nextjs' }
+            user: { uid, username, role: 'user', domain, membership_expire_time, type: 'nextjs' }
           };
         }
       }
@@ -136,14 +143,14 @@ apiRouter.post('/refresh-token', async (req, res) => {
   try {
     const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
 
-    const { uid, username, domain, membership_expire_time, type } = decoded;
+    const { uid, username, role, domain, membership_expire_time, type } = decoded;
 
     if (new Date(membership_expire_time) < new Date()) {
       return res.status(403).json({ message: 'Membership is expired. Please renew your subscription.' });
     }
 
     // Generate new access token
-    const newAccessToken = jwt.sign({ uid, username, domain, membership_expire_time, type }, JWT_SECRET, { expiresIn: '15m' });
+    const newAccessToken = jwt.sign({ uid, username, role, domain, membership_expire_time, type }, JWT_SECRET, { expiresIn: '15m' });
 
     res.json({
       authentication_success: true,
@@ -159,14 +166,14 @@ apiRouter.post('/refresh-token', async (req, res) => {
 // App list endpoint
 apiRouter.get('/app_list', verifyToken, async (req, res) => {
   try {
-    const { username, domain, type } = req.user;
+    const { username, domain, type, role, uid } = req.user;
 
     const response = await fetch('https://debicaserver.click/api/apps/get-apps', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ rootUrl: type === 'wordpress' ? domain : null })
+      body: JSON.stringify({ rootUrl: type === 'wordpress' ? domain : null, id: uid, name: username, role })
     });
 
     if (!response.ok) {

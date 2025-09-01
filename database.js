@@ -55,8 +55,6 @@ db.serialize(() => {
       CREATE TABLE IF NOT EXISTS servers (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           domain TEXT NOT NULL,
-          username TEXT NOT NULL,
-          password TEXT NOT NULL,
           membership_key TEXT NOT NULL,
           type TEXT NOT NULL,
           is_active INTEGER DEFAULT 1,

@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const db = require('./database');
 
-const { verifyToken, updateFunction, JWT_SECRET, JWT_REFRESH_SECRET } = require('./common');
+const { verifyToken, JWT_SECRET, JWT_REFRESH_SECRET } = require('./common');
 
 const app = express();
 const PORT = 8001;
@@ -100,9 +100,9 @@ apiRouter.post('/servers', verifyToken, async (req, res) => {
     return res.status(403).json({ message: 'Admin access required' });
   }
 
-  const { domain, username, password, membership_key, type } = req.body;
-  if (!domain || !username || !password || !membership_key || !type) {
-    return res.status(400).json({ message: 'Domain, username, password, membership api key, and type required' });
+  const { domain, membership_key, type } = req.body;
+  if (!domain || !membership_key || !type) {
+    return res.status(400).json({ message: 'Domain, membership api key, and type required' });
   }
 
   try {
@@ -116,31 +116,18 @@ apiRouter.post('/servers', verifyToken, async (req, res) => {
     if (server) {
       return res.status(400).json({ message: 'Server with this domain already exists' });
     }
-    if (type === 'wordpress') {
-      const result = await updateFunction(domain, username, password);
-      if (!result.status) {
-        return res.status(500).json({ message: result.message });
-      }
-    }
+
     await new Promise((resolve, reject) => {
-      db.run(
-        'INSERT INTO servers (domain, username, password, membership_key, type) VALUES (?, ?, ?, ?, ?)',
-        [domain, username, password, membership_key, type],
-        (err) => {
-          if (err) reject(err);
-          resolve();
-        }
-      );
+      db.run('INSERT INTO servers (domain, membership_key, type) VALUES (?, ?, ?)', [domain, membership_key, type], (err) => {
+        if (err) reject(err);
+        resolve();
+      });
     });
     const servers = await new Promise((resolve, reject) => {
-      db.all(
-        'SELECT id, domain, username, password, membership_key, type, is_active, created_at, updated_at FROM servers',
-        [],
-        (err, rows) => {
-          if (err) reject(err);
-          resolve(rows);
-        }
-      );
+      db.all('SELECT id, domain, membership_key, type, is_active, created_at, updated_at FROM servers', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
     });
     res.status(201).json({ message: 'Server added successfully', servers });
   } catch (error) {
@@ -156,9 +143,9 @@ apiRouter.put('/servers/:id', verifyToken, async (req, res) => {
   }
 
   const { id } = req.params;
-  const { domain, username, password, membership_key, is_active } = req.body;
+  const { domain, membership_key, is_active } = req.body;
 
-  if (!domain && !username && !password && !membership_key && is_active === undefined) {
+  if (!domain && !membership_key && is_active === undefined) {
     return res.status(400).json({ message: 'At least one field required for update' });
   }
 
@@ -169,14 +156,6 @@ apiRouter.put('/servers/:id', verifyToken, async (req, res) => {
     if (domain) {
       updates.push('domain = ?');
       values.push(domain);
-    }
-    if (username) {
-      updates.push('username = ?');
-      values.push(username);
-    }
-    if (password) {
-      updates.push('password = ?');
-      values.push(password);
     }
     if (membership_key) {
       updates.push('membership_key = ?');
@@ -197,14 +176,10 @@ apiRouter.put('/servers/:id', verifyToken, async (req, res) => {
     });
 
     const servers = await new Promise((resolve, reject) => {
-      db.all(
-        'SELECT id, domain, username, password, membership_key, type, is_active, created_at, updated_at FROM servers',
-        [],
-        (err, rows) => {
-          if (err) reject(err);
-          resolve(rows);
-        }
-      );
+      db.all('SELECT id, domain, membership_key, type, is_active, created_at, updated_at FROM servers', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
     });
     res.json({ message: 'Server updated successfully', servers });
   } catch (error) {
@@ -229,14 +204,10 @@ apiRouter.delete('/servers/:id', verifyToken, async (req, res) => {
       });
     });
     const servers = await new Promise((resolve, reject) => {
-      db.all(
-        'SELECT id, domain, username, password, membership_key, type, is_active, created_at, updated_at FROM servers',
-        [],
-        (err, rows) => {
-          if (err) reject(err);
-          resolve(rows);
-        }
-      );
+      db.all('SELECT id, domain, membership_key, type, is_active, created_at, updated_at FROM servers', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
     });
     res.json({ message: 'Server deleted successfully', servers });
   } catch (error) {
@@ -249,14 +220,10 @@ apiRouter.delete('/servers/:id', verifyToken, async (req, res) => {
 apiRouter.get('/servers', verifyToken, async (req, res) => {
   try {
     const servers = await new Promise((resolve, reject) => {
-      db.all(
-        'SELECT id, domain, username, password, membership_key, type, is_active, created_at, updated_at FROM servers',
-        [],
-        (err, rows) => {
-          if (err) reject(err);
-          resolve(rows);
-        }
-      );
+      db.all('SELECT id, domain, membership_key, type, is_active, created_at, updated_at FROM servers', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
     });
     res.json({ servers });
   } catch (error) {
