@@ -233,7 +233,7 @@ apiRouter.get('/servers', verifyToken, async (req, res) => {
 });
 
 // Mount the router with the prefix
-app.use('/v1', apiRouter);
+app.use('/api/v1', apiRouter);
 
 // Error handling middleware
 app.use((err, _req, res, _next) => {
