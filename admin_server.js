@@ -14,7 +14,7 @@ const PORT = 8001;
 app.use(bodyParser.json({ limit: '1kb' })); // Limit payload size for security
 app.use(
   cors({
-    origin: 'http://46.62.137.213:8000', // Adjust to your frontend's domain/port
+    origin: 'https://admin.kloow.com', // Adjust to your frontend's domain/port
     credentials: true
   })
 );
@@ -233,7 +233,7 @@ apiRouter.get('/servers', verifyToken, async (req, res) => {
 });
 
 // Mount the router with the prefix
-app.use('/api/v1', apiRouter);
+app.use('/v1', apiRouter);
 
 // Error handling middleware
 app.use((err, _req, res, _next) => {
@@ -243,5 +243,5 @@ app.use((err, _req, res, _next) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Proxy server running on http://localhost:${PORT}`);
+  console.log(`Proxy server running on http://127.0.0.1:${PORT}`);
 });
