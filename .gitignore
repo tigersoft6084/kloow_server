@@ -108,3 +108,5 @@ dist
 *.bak
 
 db/data.db
+
+uploads/

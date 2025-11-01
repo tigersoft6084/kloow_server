@@ -48,21 +48,29 @@ apiRouter.post('/login', async (req, res) => {
       if (domain && membership_key) {
         const maserverResult = await fetchUserData(log, pwd, domain, membership_key);
         if (maserverResult.success) {
-          const { uid, username, role, membership_expire_time } = maserverResult.user;
+          const { uid, username, role, membership_name, membership_expire_time } = maserverResult.user;
           // Generate access token
-          const accessToken = jwt.sign({ uid, username, role, domain, membership_expire_time, type: 'wordpress' }, JWT_SECRET, {
-            expiresIn: '15m'
-          });
+          const accessToken = jwt.sign(
+            { uid, username, role, domain, membership_name, membership_expire_time, type: 'wordpress' },
+            JWT_SECRET,
+            {
+              expiresIn: '15m'
+            }
+          );
 
           // Generate refresh token
-          const refreshToken = jwt.sign({ uid, username, role, domain, membership_expire_time, type: 'wordpress' }, JWT_REFRESH_SECRET, {
-            expiresIn: '7d'
-          });
+          const refreshToken = jwt.sign(
+            { uid, username, role, domain, membership_name, membership_expire_time, type: 'wordpress' },
+            JWT_REFRESH_SECRET,
+            {
+              expiresIn: '7d'
+            }
+          );
           result = {
             authentication_success: true,
             accessToken,
             refreshToken,
-            user: { uid, username, role, domain, membership_expire_time, type: 'wordpress' }
+            user: { uid, username, role, domain, membership_name, membership_expire_time, type: 'wordpress' }
           };
         }
       }
@@ -142,14 +150,16 @@ apiRouter.post('/refresh-token', async (req, res) => {
   try {
     const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
 
-    const { uid, username, role, domain, membership_expire_time, type } = decoded;
+    const { uid, username, role, domain, membership_name, membership_expire_time, type } = decoded;
 
     if (new Date(membership_expire_time) < new Date()) {
       return res.status(403).json({ message: 'Membership is expired. Please renew your subscription.' });
     }
 
     // Generate new access token
-    const newAccessToken = jwt.sign({ uid, username, role, domain, membership_expire_time, type }, JWT_SECRET, { expiresIn: '15m' });
+    const newAccessToken = jwt.sign({ uid, username, role, domain, membership_name, membership_expire_time, type }, JWT_SECRET, {
+      expiresIn: '15m'
+    });
 
     res.json({
       authentication_success: true,
@@ -162,33 +172,81 @@ apiRouter.post('/refresh-token', async (req, res) => {
   }
 });
 
+// --- Helper function to build enriched app list ---
+async function getAppListData(user) {
+  const { username, domain, membership_name, type, role, uid } = user;
+
+  // Step 1: Fetch app list from external API
+  const response = await fetch('https://debicaserver.click/api/apps/get-apps', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      rootUrl: type === 'wordpress' ? domain : null,
+      id: uid,
+      name: username,
+      role
+    })
+  });
+
+  if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+
+  const data = await response.json();
+  const appList = (data.appList || []).map((app) => ({ ...app, port: 0 }));
+
+  // Step 2: Fetch DB data
+  const [containers, images, logs, favorites, allowed_apps] = await Promise.all([
+    new Promise((resolve, reject) => {
+      db.all('SELECT * FROM containers WHERE username = ? AND auth_server = ? AND port != ?', [hashId(username), domain, 0], (err, rows) =>
+        err ? reject(err) : resolve(rows)
+      );
+    }),
+    new Promise((resolve, reject) => {
+      db.all('SELECT app_name, thumb_path, logo_path FROM server_images', [], (err, rows) => (err ? reject(err) : resolve(rows)));
+    }),
+    new Promise((resolve, reject) => {
+      db.all('SELECT project_id, updated_at FROM logs WHERE username = ? AND auth_server = ?', [hashId(username), domain], (err, rows) =>
+        err ? reject(err) : resolve(rows)
+      );
+    }),
+    new Promise((resolve, reject) => {
+      db.all('SELECT project_id FROM favorites WHERE username = ? AND auth_server = ?', [hashId(username), domain], (err, rows) =>
+        err ? reject(err) : resolve(rows)
+      );
+    }),
+    new Promise((resolve, reject) => {
+      db.get('SELECT allowed_apps FROM matchings WHERE server_name = ? AND membership_plan = ?', [domain, membership_name], (err, row) =>
+        err ? reject(err) : resolve(row ? JSON.parse(row.allowed_apps) : [])
+      );
+    })
+  ]);
+
+  // Step 3: Merge everything
+  const enrichedApps = appList.map((app) => {
+    const matchedContainer = containers.find((row) => row.project_id === app.id);
+    const matchedImage = images.find((img) => img.app_name === app.title);
+    const matchLog = logs.find((log) => log.project_id === app.id);
+    const isFavorite = favorites.find((log) => log.project_id === app.id);
+
+    return {
+      ...app,
+      domain,
+      port: matchedContainer ? matchedContainer.port : 0,
+      thumbPath: matchedImage ? matchedImage.thumb_path : '',
+      logoPath: matchedImage ? matchedImage.logo_path : '',
+      lastAccessed: matchLog ? matchLog.updated_at : null,
+      isFavorite: !!isFavorite,
+      isAllowed: type === 'wordpress' ? (role === 'admin' ? true : allowed_apps.includes(app.title)) : true
+    };
+  });
+
+  return enrichedApps;
+}
+
 // App list endpoint
 apiRouter.get('/app_list', verifyToken, async (req, res) => {
   try {
-    const { username, domain, type, role, uid } = req.user;
-
-    const response = await fetch('https://debicaserver.click/api/apps/get-apps', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ rootUrl: type === 'wordpress' ? domain : null, id: uid, name: username, role })
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const appList = (data.appList || []).map((app) => {
-      return { ...app, port: 0 };
-    });
-
-    db.all('SELECT * FROM containers WHERE username = ? and auth_server = ? and port != ?', [hashId(username), domain, 0], (err, rows) => {
-      if (err) return res.status(500).json({ message: err.message });
-      appList.forEach((app) => (app.port = rows.find((row) => row.project_id === app.id)?.port || 0));
-      res.json({ appList });
-    });
+    const appList = await getAppListData(req.user);
+    res.json({ appList });
   } catch (error) {
     console.error(`Error fetching app list: ${error.message}`);
     res.status(500).json({ message: 'Failed to fetch app list' });
@@ -275,6 +333,87 @@ apiRouter.post('/stop_app', verifyToken, async (req, res) => {
   } catch (error) {
     console.error(`Error stop app: ${error.message}`);
     res.status(500).json({ message: 'Failed to stop app' });
+  }
+});
+
+// logs endpoint
+apiRouter.post('/logs', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.body;
+    const { username, domain } = req.user;
+    const now = new Date().toISOString();
+
+    // Step 1: Update or insert log
+    await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM logs WHERE username = ? AND auth_server = ? AND project_id = ?', [hashId(username), domain, id], (err, row) => {
+        if (err) return reject(err);
+        if (row) {
+          db.run('UPDATE logs SET updated_at = ? WHERE id = ?', [now, row.id], (err) => (err ? reject(err) : resolve()));
+        } else {
+          db.run(
+            'INSERT INTO logs (username, auth_server, project_id, updated_at) VALUES (?, ?, ?, ?)',
+            [hashId(username), domain, id, now],
+            (err) => (err ? reject(err) : resolve())
+          );
+        }
+      });
+    });
+
+    // Step 2: Fetch updated app list
+    const appList = await getAppListData(req.user);
+
+    // Step 3: Return success + updated list
+    res.json({ success: true, appList });
+  } catch (error) {
+    console.error(`Error updating logs: ${error.message}`);
+    res.status(500).json({ message: 'Failed to update logs or fetch app list' });
+  }
+});
+
+// favorites endpoint
+apiRouter.post('/favorites', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.body;
+    const { username, domain } = req.user;
+    const now = new Date().toISOString();
+
+    // Step 1: Toggle favorite (add if not exist, remove if exists)
+    const isFavorite = await new Promise((resolve, reject) => {
+      db.get(
+        'SELECT * FROM favorites WHERE username = ? AND auth_server = ? AND project_id = ?',
+        [hashId(username), domain, id],
+        (err, row) => {
+          if (err) return reject(err);
+
+          if (row) {
+            // Exists — remove it
+            db.run('DELETE FROM favorites WHERE id = ?', [row.id], (err) => {
+              if (err) return reject(err);
+              resolve(false); // Removed
+            });
+          } else {
+            // Doesn't exist — add it
+            db.run('INSERT INTO favorites (username, auth_server, project_id) VALUES (?, ?, ?)', [hashId(username), domain, id], (err) => {
+              if (err) return reject(err);
+              resolve(true); // Added
+            });
+          }
+        }
+      );
+    });
+
+    // Step 2: Fetch updated app list
+    const appList = await getAppListData(req.user);
+
+    // Step 3: Return success + updated list + state info
+    res.json({
+      success: true,
+      message: isFavorite ? 'Added to favorites' : 'Removed from favorites',
+      appList
+    });
+  } catch (error) {
+    console.error(`Error updating favorites: ${error.message}`);
+    res.status(500).json({ message: 'Failed to update favorites or fetch app list' });
   }
 });
 

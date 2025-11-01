@@ -70,34 +70,56 @@ const fetchUserData = async (log, pwd, domain, membership_key) => {
     });
 
     const loginResult = await loginResponse.json();
-
     if (!loginResult.status) {
       return { success: false, message: loginResult.data || 'Invalid credentials' };
     }
 
     let membership = null;
-    if (!loginResult.data.roles.includes('administrator')) {
-      // Step 2: Fetch membership data
-      const membershipResponse = await fetch(
-        `https://${domain}/?ihc_action=api-gate&ihch=${membership_key}&action=get_user_levels&uid=${loginResult.data.uid}`
-      );
-      const membershipResult = await membershipResponse.json();
-      membership = Object.values(membershipResult.response)[0];
-      if (membership?.is_expired !== false) {
-        return {
-          success: false,
-          message: 'Membership is expired. Please renew your subscription.'
-        };
-      }
-    }
+    // if (!loginResult.data.roles.includes('administrator')) {
+    //   // Step 2: Fetch membership data
+    //   const membershipResponse = await fetch(
+    //     `https://${domain}/?ihc_action=api-gate&ihch=${membership_key}&action=get_user_levels&uid=${loginResult.data.uid}`
+    //   );
+    //   const membershipResult = await membershipResponse.json();
+    //   membership = Object.values(membershipResult.response)[0];
+    //   if (membership?.is_expired !== false) {
+    //     return {
+    //       success: false,
+    //       message: 'Membership is expired. Please renew your subscription.'
+    //     };
+    //   }
+    // }
 
+    // Step 2: Fetch membership data
+    const membershipResponse = await fetch(
+      `https://${domain}/?ihc_action=api-gate&ihch=${membership_key}&action=get_user_levels&uid=${loginResult.data.uid}`
+      // `https://${domain}/?ihc_action=api-gate&ihch=${membership_key}&action=get_user_levels&uid=4096`
+    );
+    const membershipResult = await membershipResponse.json();
+    console.log('Membership Result:', membershipResult);
+    membership = Object.values(membershipResult.response)[0];
+    console.log('Membership Data:', membership);
+    if (membership && membership?.is_expired !== false) {
+      return {
+        success: false,
+        message: 'Membership is expired. Please renew your subscription.'
+      };
+    }
+    console.log(
+      'membership_expire_time:',
+      loginResult.data.roles.includes('administrator') ? '2100-12-31 23:59:59' : membership?.expire_time || '2000-12-31 23:59:59'
+    );
+    console.log('membership_name:', membership?.label || '-');
     return {
       success: true,
       user: {
         uid: loginResult.data.uid,
         role: loginResult.data.roles.includes('administrator') ? 'admin' : 'user',
         username: log,
-        membership_expire_time: membership?.expire_time || '2100-12-31 23:59:59'
+        membership_name: membership?.label || '-',
+        membership_expire_time: loginResult.data.roles.includes('administrator')
+          ? '2100-12-31 23:59:59'
+          : membership?.expire_time || '2000-12-31 23:59:59'
       }
     };
   } catch (error) {

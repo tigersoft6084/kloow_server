@@ -79,7 +79,8 @@ db.serialize(() => {
           auth_server TEXT NOT NULL,
           project_id TEXT NOT NULL,
           container_id TEXT NOT NULL,
-          port INTEGER NOT NULL DEFAULT 0
+          port INTEGER NOT NULL DEFAULT 0,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `,
     (err) => {
@@ -87,6 +88,98 @@ db.serialize(() => {
         console.error('Error creating containers table:', err.message);
       } else {
         console.log('Containers table initialized');
+      }
+    }
+  );
+
+  db.run(
+    `
+      CREATE TABLE IF NOT EXISTS logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          username TEXT NOT NULL,
+          auth_server TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    (err) => {
+      if (err) {
+        console.error('Error creating logs table:', err.message);
+      } else {
+        console.log('Logs table initialized');
+      }
+    }
+  );
+
+  db.run(
+    `
+      CREATE TABLE IF NOT EXISTS favorites (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          username TEXT NOT NULL,
+          auth_server TEXT NOT NULL,
+          project_id TEXT NOT NULL
+      )
+    `,
+    (err) => {
+      if (err) {
+        console.error('Error creating logs table:', err.message);
+      } else {
+        console.log('Logs table initialized');
+      }
+    }
+  );
+
+  db.run(
+    `
+      CREATE TABLE IF NOT EXISTS server_images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        app_name TEXT NOT NULL,
+        thumb_path TEXT NOT NULL,
+        logo_path TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    (err) => {
+      if (err) {
+        console.error('Error creating server images table:', err.message);
+      } else {
+        console.log('Server images table initialized');
+      }
+    }
+  );
+
+  db.run(
+    `
+      CREATE TABLE IF NOT EXISTS membership_plans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plan_name TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    (err) => {
+      if (err) {
+        console.error('Error creating membership_plans table:', err.message);
+      } else {
+        console.log('membership_plans table initialized');
+      }
+    }
+  );
+
+  db.run(
+    `
+      CREATE TABLE IF NOT EXISTS matchings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_name TEXT NOT NULL,
+        membership_plan TEXT NOT NULL,
+        allowed_apps TEXT DEFAULT "[]",
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    (err) => {
+      if (err) {
+        console.error('Error creating matchings table:', err.message);
+      } else {
+        console.log('Matchings table initialized');
       }
     }
   );
