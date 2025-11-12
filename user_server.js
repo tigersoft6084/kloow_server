@@ -48,10 +48,10 @@ apiRouter.post('/login', async (req, res) => {
       if (domain && membership_key) {
         const maserverResult = await fetchUserData(log, pwd, domain, membership_key);
         if (maserverResult.success) {
-          const { uid, username, role, membership_name, membership_expire_time } = maserverResult.user;
+          const { uid, username, role, membership_id, membership_name, membership_expire_time } = maserverResult.user;
           // Generate access token
           const accessToken = jwt.sign(
-            { uid, username, role, domain, membership_name, membership_expire_time, type: 'wordpress' },
+            { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type: 'wordpress' },
             JWT_SECRET,
             {
               expiresIn: '15m'
@@ -60,7 +60,7 @@ apiRouter.post('/login', async (req, res) => {
 
           // Generate refresh token
           const refreshToken = jwt.sign(
-            { uid, username, role, domain, membership_name, membership_expire_time, type: 'wordpress' },
+            { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type: 'wordpress' },
             JWT_REFRESH_SECRET,
             {
               expiresIn: '7d'
@@ -70,7 +70,7 @@ apiRouter.post('/login', async (req, res) => {
             authentication_success: true,
             accessToken,
             refreshToken,
-            user: { uid, username, role, domain, membership_name, membership_expire_time, type: 'wordpress' }
+            user: { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type: 'wordpress' }
           };
         }
       }
@@ -104,15 +104,21 @@ apiRouter.post('/login', async (req, res) => {
         if (loginResult?.token) {
           const uid = loginResult?.user?.id;
           const username = log;
+          const membership_id = 0;
+          const membership_name = 'Kloow';
           const membership_expire_time = '2100-12-31 23:59:59';
           // Generate access token
-          const accessToken = jwt.sign({ uid, username, role: 'user', domain, membership_expire_time, type: 'nextjs' }, JWT_SECRET, {
-            expiresIn: '15m'
-          });
+          const accessToken = jwt.sign(
+            { uid, username, role: 'user', domain, membership_id, membership_name, membership_expire_time, type: 'nextjs' },
+            JWT_SECRET,
+            {
+              expiresIn: '15m'
+            }
+          );
 
           // Generate refresh token
           const refreshToken = jwt.sign(
-            { uid, username, role: 'user', domain, membership_expire_time, type: 'nextjs' },
+            { uid, username, role: 'user', domain, membership_id, membership_name, membership_expire_time, type: 'nextjs' },
             JWT_REFRESH_SECRET,
             {
               expiresIn: '7d'
@@ -122,7 +128,7 @@ apiRouter.post('/login', async (req, res) => {
             authentication_success: true,
             accessToken,
             refreshToken,
-            user: { uid, username, role: 'user', domain, membership_expire_time, type: 'nextjs' }
+            user: { uid, username, role: 'user', domain, membership_id, membership_name, membership_expire_time, type: 'nextjs' }
           };
         }
       }
@@ -150,21 +156,25 @@ apiRouter.post('/refresh-token', async (req, res) => {
   try {
     const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
 
-    const { uid, username, role, domain, membership_name, membership_expire_time, type } = decoded;
+    const { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type } = decoded;
 
     if (new Date(membership_expire_time) < new Date()) {
       return res.status(403).json({ message: 'Membership is expired. Please renew your subscription.' });
     }
 
     // Generate new access token
-    const newAccessToken = jwt.sign({ uid, username, role, domain, membership_name, membership_expire_time, type }, JWT_SECRET, {
-      expiresIn: '15m'
-    });
+    const newAccessToken = jwt.sign(
+      { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type },
+      JWT_SECRET,
+      {
+        expiresIn: '15m'
+      }
+    );
 
     res.json({
       authentication_success: true,
       accessToken: newAccessToken,
-      user: { uid, username, domain, membership_expire_time, type }
+      user: { uid, username, domain, membership_id, membership_name, membership_expire_time, type }
     });
   } catch (error) {
     console.error('Refresh token verification message:', error);
@@ -174,7 +184,7 @@ apiRouter.post('/refresh-token', async (req, res) => {
 
 // --- Helper function to build enriched app list ---
 async function getAppListData(user) {
-  const { username, domain, membership_name, type, role, uid } = user;
+  const { username, domain, membership_id, type, role, uid } = user;
 
   // Step 1: Fetch app list from external API
   const response = await fetch('https://debicaserver.click/api/apps/get-apps', {
@@ -214,7 +224,7 @@ async function getAppListData(user) {
       );
     }),
     new Promise((resolve, reject) => {
-      db.get('SELECT allowed_apps FROM matchings WHERE server_name = ? AND membership_plan = ?', [domain, membership_name], (err, row) =>
+      db.get('SELECT allowed_apps FROM matchings WHERE server_name = ? AND membership_id = ?', [domain, membership_id], (err, row) =>
         err ? reject(err) : resolve(row ? JSON.parse(row.allowed_apps) : [])
       );
     })

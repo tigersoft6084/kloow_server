@@ -97,6 +97,46 @@ apiRouter.post('/refresh-token', async (req, res) => {
   }
 });
 
+// update password endpoint. check the current password first
+apiRouter.post('/update_password', verifyToken, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ message: 'Current and new passwords required' });
+  }
+
+  try {
+    const user = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM users WHERE id = ?', [req.user.id], (err, row) => {
+        if (err) reject(err);
+        resolve(row);
+      });
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isPasswordValid) {
+      return res.status(402).json({ message: 'Current password is incorrect' });
+    }
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    await new Promise((resolve, reject) => {
+      db.run('UPDATE users SET password = ? WHERE id = ?', [hashedNewPassword, req.user.id], (err) => {
+        if (err) reject(err);
+        resolve();
+      });
+    });
+
+    res.json({ message: 'Password updated successfully. Please log in again.' });
+  } catch (error) {
+    console.error('Update password error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 // Add server endpoint (admin only)
 apiRouter.post('/servers', verifyToken, async (req, res) => {
   if (!req.user.is_admin) {
@@ -235,200 +275,48 @@ apiRouter.get('/servers', verifyToken, async (req, res) => {
   }
 });
 
-// Get membership_plans list endpoint
-apiRouter.get('/membership_plans', verifyToken, async (req, res) => {
+// Get wordperss servers and their all memberships
+apiRouter.get('/wordpress_memberships', verifyToken, async (req, res) => {
   try {
-    const membership_plans = await new Promise((resolve, reject) => {
-      db.all('SELECT id, plan_name, created_at FROM membership_plans', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
-    });
-    res.json({ membership_plans });
-  } catch (error) {
-    console.error('Get membership plans error:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
-
-// Create role endpoint (admin only)
-apiRouter.post('/membership_plans', verifyToken, async (req, res) => {
-  if (!req.user.is_admin) {
-    return res.status(403).json({ message: 'Admin access required' });
-  }
-
-  const { plan_name } = req.body;
-  if (!plan_name) {
-    return res.status(400).json({ message: 'Membership plan name required' });
-  }
-
-  try {
-    await new Promise((resolve, reject) => {
-      db.run('INSERT INTO membership_plans (plan_name) VALUES (?)', [plan_name], (err) => {
-        if (err) reject(err);
-        resolve();
-      });
-    });
-    const membership_plans = await new Promise((resolve, reject) => {
-      db.all('SELECT id, plan_name, created_at FROM membership_plans', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
-    });
-    res.status(201).json({ message: 'membership plan created successfully', membership_plans });
-  } catch (error) {
-    console.error('Create membership plan error:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
-
-// Update role endpoint (admin only)
-apiRouter.put('/membership_plans/:id', verifyToken, async (req, res) => {
-  if (!req.user.is_admin) {
-    return res.status(403).json({ message: 'Admin access required' });
-  }
-
-  const { id } = req.params;
-  const { plan_name } = req.body;
-
-  if (!plan_name) {
-    return res.status(400).json({ message: 'Membership plan name required for update' });
-  }
-
-  try {
-    await new Promise((resolve, reject) => {
-      db.run('UPDATE membership_plans SET plan_name = ? WHERE id = ?', [plan_name, id], (err) => {
-        if (err) reject(err);
-        resolve();
-      });
-    });
-    const membership_plans = await new Promise((resolve, reject) => {
-      db.all('SELECT id, plan_name, created_at FROM membership_plans', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
-    });
-    res.json({ message: 'Memberhship plan updated successfully', membership_plans });
-  } catch (error) {
-    console.error('Update membership plan error:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
-
-// Delete role endpoint (admin only)
-apiRouter.delete('/membership_plans/:id', verifyToken, async (req, res) => {
-  if (!req.user.is_admin) {
-    return res.status(403).json({ message: 'Admin access required' });
-  }
-
-  const { id } = req.params;
-
-  try {
-    await new Promise((resolve, reject) => {
-      db.run('DELETE FROM membership_plans WHERE id = ?', [id], (err) => {
-        if (err) reject(err);
-        resolve();
-      });
-    });
-    const membership_plans = await new Promise((resolve, reject) => {
-      db.all('SELECT id, plan_name, created_at FROM membership_plans', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
-    });
-    res.json({ message: 'Membership plan deleted successfully', membership_plans });
-  } catch (error) {
-    console.error('Delete membership plan error:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
-
-// Get wp server & membership plan matching result
-apiRouter.get('/wp_server_membership_plan_matching', verifyToken, async (req, res) => {
-  try {
-    const matchings = await new Promise((resolve, reject) => {
-      db.all('SELECT id, server_name, membership_plan FROM matchings', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
-    });
-    res.json({ matchings });
-  } catch (error) {
-    console.error('Get matchings error:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
-
-// Update wp server & membership plan matching (admin only)
-// frontend will send the array of objects with server_name, membership_plan
-// if the server_name and membership_plan already exists, it will be ignored
-// if not, it will be inserted
-// if there is an existing record in the table but not exist in the request, it will be deleted
-apiRouter.put('/wp_server_membership_plan_matching', verifyToken, async (req, res) => {
-  if (!req.user.is_admin) {
-    return res.status(403).json({ message: 'Admin access required' });
-  }
-
-  const { matchings } = req.body;
-  if (!Array.isArray(matchings)) {
-    return res.status(400).json({ message: 'Matchings array required' });
-  }
-
-  try {
-    const existingMatchings = await new Promise((resolve, reject) => {
-      db.all('SELECT server_name, membership_plan FROM matchings', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
+    const wordpressServers = await new Promise((resolve, reject) => {
+      db.all(
+        'SELECT id, domain, membership_key, type, is_active, created_at, updated_at FROM servers WHERE type = ?',
+        ['wordpress'],
+        (err, rows) => {
+          if (err) reject(err);
+          resolve(rows);
+        }
+      );
     });
 
-    const existingSet = new Set(existingMatchings.map((m) => `${m.server_name}||${m.membership_plan}`));
-    const newSet = new Set(matchings.map((m) => `${m.server_name}||${m.membership_plan}`));
+    const tmpResult = [];
+    for (const server of wordpressServers) {
+      const membershipResponse = await fetch(
+        `https://${server.domain}/?ihc_action=api-gate&ihch=${server.membership_key}&action=list_levels`
+      );
+      const memberships = await membershipResponse.json();
+      tmpResult.push({
+        ...server,
+        memberships: memberships.response || []
+      });
+    }
 
-    // Insert new matchings
-    for (const matching of matchings) {
-      const key = `${matching.server_name}||${matching.membership_plan}`;
-      if (!existingSet.has(key)) {
-        await new Promise((resolve, reject) => {
-          db.run(
-            'INSERT INTO matchings (server_name, membership_plan) VALUES (?, ?)',
-            [matching.server_name, matching.membership_plan],
-            (err) => {
-              if (err) reject(err);
-              resolve();
-            }
-          );
+    const result = [];
+    for (const serverData of tmpResult) {
+      for (const membership in serverData.memberships) {
+        result.push({
+          server_id: serverData.id,
+          domain: serverData.domain,
+          is_active: serverData.is_active,
+          membership_id: serverData.memberships[membership].level_id,
+          membership_label: serverData.memberships[membership].label
         });
       }
     }
 
-    // Delete removed matchings
-    for (const existing of existingMatchings) {
-      const key = `${existing.server_name}||${existing.membership_plan}`;
-      if (!newSet.has(key)) {
-        await new Promise((resolve, reject) => {
-          db.run(
-            'DELETE FROM matchings WHERE server_name = ? AND membership_plan = ?',
-            [existing.server_name, existing.membership_plan],
-            (err) => {
-              if (err) reject(err);
-              resolve();
-            }
-          );
-        });
-      }
-    }
-
-    const updatedMatchings = await new Promise((resolve, reject) => {
-      db.all('SELECT id, server_name, membership_plan FROM matchings', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
-    });
-
-    res.json({ message: 'Matchings updated successfully', matchings: updatedMatchings });
+    res.json({ wordpress_memberships: result });
   } catch (error) {
-    console.error('Update matchings error:', error);
+    console.error('Get WordPress servers error:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -437,7 +325,7 @@ apiRouter.put('/wp_server_membership_plan_matching', verifyToken, async (req, re
 apiRouter.get('/allowed_apps', verifyToken, async (req, res) => {
   try {
     const allowed_apps = await new Promise((resolve, reject) => {
-      db.all('SELECT id, server_name, membership_plan, allowed_apps FROM matchings', [], (err, rows) => {
+      db.all('SELECT id, server_name, membership_id, allowed_apps FROM matchings', [], (err, rows) => {
         if (err) reject(err);
         resolve(rows);
       });
@@ -446,7 +334,7 @@ apiRouter.get('/allowed_apps', verifyToken, async (req, res) => {
       allowed_apps: allowed_apps.map((app) => {
         return {
           server_name: app.server_name,
-          membership_plan: app.membership_plan,
+          membership_id: parseInt(app.membership_id),
           allowed_apps: JSON.parse(app.allowed_apps)
         };
       })
@@ -457,7 +345,7 @@ apiRouter.get('/allowed_apps', verifyToken, async (req, res) => {
   }
 });
 
-// Update allowed apps for the array of the server_name & membership_plan and allowed_apps (admin only)
+// Update or insert allowed apps for the array of the server_name & membership_id and allowed_apps (admin only)
 apiRouter.put('/allowed_apps', verifyToken, async (req, res) => {
   if (!req.user.is_admin) {
     return res.status(403).json({ message: 'Admin access required' });
@@ -471,10 +359,33 @@ apiRouter.put('/allowed_apps', verifyToken, async (req, res) => {
   try {
     for (const app of allowed_apps) {
       const allowedAppsString = JSON.stringify(app.allowed_apps || []);
+      const existingRecord = await new Promise((resolve, reject) => {
+        db.get('SELECT id FROM matchings WHERE server_name = ? AND membership_id = ?', [app.server_name, app.membership_id], (err, row) => {
+          if (err) reject(err);
+          resolve(row);
+        });
+      });
+
+      if (!existingRecord) {
+        // Insert new record
+        await new Promise((resolve, reject) => {
+          db.run(
+            'INSERT INTO matchings (server_name, membership_id, allowed_apps) VALUES (?, ?, ?)',
+            [app.server_name, app.membership_id, allowedAppsString],
+            (err) => {
+              if (err) reject(err);
+              resolve();
+            }
+          );
+        });
+        continue;
+      }
+
+      // Update existing record
       await new Promise((resolve, reject) => {
         db.run(
-          'UPDATE matchings SET allowed_apps = ? WHERE server_name = ? AND membership_plan = ?',
-          [allowedAppsString, app.server_name, app.membership_plan],
+          'UPDATE matchings SET allowed_apps = ? WHERE server_name = ? AND membership_id = ?',
+          [allowedAppsString, app.server_name, app.membership_id],
           (err) => {
             if (err) reject(err);
             resolve();
@@ -484,7 +395,7 @@ apiRouter.put('/allowed_apps', verifyToken, async (req, res) => {
     }
 
     const updatedAllowedApps = await new Promise((resolve, reject) => {
-      db.all('SELECT id, server_name, membership_plan, allowed_apps FROM matchings', [], (err, rows) => {
+      db.all('SELECT id, server_name, membership_id, allowed_apps FROM matchings', [], (err, rows) => {
         if (err) reject(err);
         resolve(rows);
       });
@@ -495,7 +406,7 @@ apiRouter.put('/allowed_apps', verifyToken, async (req, res) => {
       allowed_apps: updatedAllowedApps.map((app) => {
         return {
           server_name: app.server_name,
-          membership_plan: app.membership_plan,
+          membership_id: parseInt(app.membership_id),
           allowed_apps: JSON.parse(app.allowed_apps)
         };
       })
