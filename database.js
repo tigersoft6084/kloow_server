@@ -124,7 +124,7 @@ db.serialize(() => {
       if (err) {
         console.error('Error creating logs table:', err.message);
       } else {
-        console.log('Logs table initialized');
+        console.log('Favorites table initialized');
       }
     }
   );
@@ -155,6 +155,7 @@ db.serialize(() => {
         server_name TEXT NOT NULL,
         membership_id TEXT NOT NULL,
         allowed_apps TEXT DEFAULT "[]",
+        frog BOOLEAN DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `,

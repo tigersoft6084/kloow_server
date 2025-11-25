@@ -45,6 +45,7 @@ function custom_login_handler($request) {
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.warn(`[verifyToken] no auth header for ${req.method} ${req.originalUrl}`);
     return res.status(401).json({ message: 'No token provided' });
   }
 
@@ -52,10 +53,10 @@ const verifyToken = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
-    next();
+    return next();
   } catch (error) {
-    console.error('Token verification error:', error);
-    res.status(401).json({ message: 'Invalid or expired token' });
+    console.error('[verifyToken] Token verification error:', error);
+    return res.status(401).json({ message: 'Invalid or expired token' });
   }
 };
 

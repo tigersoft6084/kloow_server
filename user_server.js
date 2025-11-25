@@ -3,10 +3,12 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const { exec } = require('child_process');
 const jwt = require('jsonwebtoken');
+const util = require('util');
 
 const db = require('./database');
 const { verifyToken, fetchUserData, hashId, JWT_SECRET, JWT_REFRESH_SECRET } = require('./common');
 
+const execAsync = util.promisify(exec);
 const app = express();
 const PORT = 3001;
 
@@ -263,55 +265,114 @@ apiRouter.get('/app_list', verifyToken, async (req, res) => {
   }
 });
 
+apiRouter.get('/frog_status', verifyToken, async (req, res) => {
+  try {
+    const { domain, membership_id, role } = req.user;
+
+    if (role === "admin") {
+      res.json({ frog: true });
+    } else {
+      const frog = await new Promise((resolve, reject) => {
+        db.get('SELECT frog FROM matchings WHERE server_name = ? AND membership_id = ?', [domain, membership_id], (err, row) =>
+          err ? reject(err) : resolve(row ? row.frog : false)
+        );
+      });
+      res.json({ frog });
+    }
+  } catch (error) {
+    console.error(`Error fetching frog status: ${error.message}`);
+    res.status(500).json({ message: 'Failed to fetch frog status' });
+  }
+})
+
 // Run app endpoint
 apiRouter.post('/run_app', verifyToken, async (req, res) => {
   try {
     const { id, url, proxyServer } = req.body;
     const { username, domain } = req.user;
-    const { default: getPort, portNumbers } = await import('get-port');
-    const port = await getPort({ port: portNumbers(10000, 32767) });
+    // check for an already running container
+    const existing = await new Promise((resolve, reject) => {
+      db.get(
+        'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
+        [hashId(username), domain, id, 0],
+        (err, row) => (err ? reject(err) : resolve(row))
+      );
+    });
 
-    db.get(
-      'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
-      [hashId(username), domain, id, 0],
-      (err, row) => {
-        if (err) return res.status(500).json({ message: err.message });
-        if (row) return res.status(500).json({ message: 'This application is already running.' });
+    console.log('Existing container check:', existing);
 
-        exec(
-          `./kasm/run.sh ${[`${hashId(username)}-${domain}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, port].join(' ')}`,
-          (error, stdout, stderr) => {
-            if (error) return res.status(500).json({ message: error.message });
+    if (existing) {
+      return res.status(500).json({ message: 'This application is already running.' });
+    }
 
-            db.get(
-              'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port = ?',
-              [hashId(username), domain, id, 0],
-              (err, row) => {
-                if (err) return res.status(500).json({ message: err.message });
-                if (row) {
-                  db.run('UPDATE containers SET container_id = ?, port = ? WHERE id = ?', [stdout.trim(), port, row.id], (err) => {
-                    if (err) return res.status(500).json({ message: err.message });
-                    res.json({ success: true, port });
-                  });
-                } else {
-                  db.run(
-                    'INSERT INTO containers (username, auth_server, project_id, container_id, port) VALUES (?, ?, ?, ?, ?)',
-                    [hashId(username), domain, id, stdout.trim(), port],
-                    (err) => {
-                      if (err) return res.status(500).json({ message: err.message });
-                      res.json({ success: true, port });
-                    }
-                  );
-                }
-              }
-            );
-          }
-        );
+    // Get all current running ports
+    let containers = await new Promise((resolve, reject) => {
+      db.all('SELECT port FROM containers where port != 0', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
+    });
+
+    // Convert DB rows → Set for fast lookup
+    const usedPorts = new Set(containers.map((row) => row.port));
+
+    // Find an available port
+    let freePort = null;
+    for (let port = 10000; port <= 10500; port++) {
+      if (!usedPorts.has(port)) {
+        freePort = port;
+        break;
       }
-    );
+    }
+
+    if (!freePort) {
+      return res.status(500).json({ message: 'No available ports in range.' });
+    }
+
+    let runStdout;
+
+    try {
+      const cmd = [`${hashId(username)}-${domain}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, freePort].join(' ');
+      const { stdout } = await execAsync(`./kasm/run.sh ${cmd}`);
+      runStdout = stdout.trim();
+    } catch (err) {
+      console.error(`Error running container: ${err.message}`);
+      return res.status(500).json({ message: `Error running container: ${err.message}` });
+    }
+
+    console.log('Container run succeeded with ID:', runStdout);
+
+    // Insert or update the DB record (find row with port = 0)
+    const maybeRow = await new Promise((resolve, reject) => {
+      db.get(
+        'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port = ?',
+        [hashId(username), domain, id, 0],
+        (err, row) => (err ? reject(err) : resolve(row))
+      );
+    });
+
+    console.log('Database record check (port=0):', maybeRow);
+
+    if (maybeRow) {
+      await new Promise((resolve, reject) => {
+        db.run('UPDATE containers SET container_id = ?, port = ? WHERE id = ?', [runStdout, freePort, maybeRow.id], (err) =>
+          err ? reject(err) : resolve()
+        );
+      });
+    } else {
+      await new Promise((resolve, reject) => {
+        db.run(
+          'INSERT INTO containers (username, auth_server, project_id, container_id, port) VALUES (?, ?, ?, ?, ?)',
+          [hashId(username), domain, id, runStdout, freePort],
+          (err) => (err ? reject(err) : resolve())
+        );
+      });
+    }
+
+    return res.json({ success: true, freePort });
   } catch (error) {
     console.error(`Error run app: ${error.message}`);
-    res.status(500).json({ message: 'Failed to run app' });
+    return res.status(500).json({ message: 'Failed to run app' });
   }
 });
 
@@ -320,29 +381,42 @@ apiRouter.post('/stop_app', verifyToken, async (req, res) => {
   try {
     const { id } = req.body;
     const { username, domain } = req.user;
-    db.get(
-      'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
-      [hashId(username), domain, id, 0],
-      (err, row) => {
-        if (err) return res.status(500).json({ message: err.message });
-        if (!row) return res.status(404).json({ message: 'Application not found' });
 
-        exec(`./kasm/stop.sh ${row.container_id}`, (error, stdout, stderr) => {
-          if (error) {
-            console.error(`Error stopping app: ${error.message}`);
-            return res.status(500).json({ message: `Error stopping app: ${error.message}` });
-          }
+    const row = await new Promise((resolve, reject) => {
+      db.get(
+        'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
+        [hashId(username), domain, id, 0],
+        (err, row) => (err ? reject(err) : resolve(row))
+      );
+    });
 
-          db.run('UPDATE containers SET port = ? WHERE id = ?', [0, row.id], (err) => {
-            if (err) return res.status(500).json({ message: err.message });
-            res.json({ success: true });
-          });
-        });
-      }
-    );
+    if (!row) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+
+    console.log('Running container check:', row);
+
+    // SECOND: stop the container
+    try {
+      await execAsync(`./kasm/stop.sh ${row.container_id}`);
+    } catch (err) {
+      console.error(`Error stopping app: ${err.message}`);
+      return res.status(500).json({ message: `Error stopping app: ${err.message}` });
+    }
+
+    console.log('Container stop succeeded for ID:', row.container_id);
+
+    // mark as stopped in DB (port -> 0)
+    await new Promise((resolve, reject) => {
+      db.run('UPDATE containers SET port = ? WHERE id = ?', [0, row.id], (err) => (err ? reject(err) : resolve()));
+    });
+
+    console.log('Database updated to mark container as stopped for ID:', row.id);
+
+    return res.json({ success: true });
   } catch (error) {
     console.error(`Error stop app: ${error.message}`);
-    res.status(500).json({ message: 'Failed to stop app' });
+    return res.status(500).json({ message: 'Failed to stop app' });
   }
 });
 

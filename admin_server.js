@@ -14,7 +14,8 @@ const app = express();
 const PORT = 8001;
 
 // Middleware
-app.use(bodyParser.json({ limit: '1kb' })); // Limit payload size for security
+app.use(bodyParser.json({ limit: '10mb' })); // Limit payload size for security
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use(
   cors({
     origin: 'https://admin.kloow.com', // Adjust to your frontend's domain/port
@@ -325,7 +326,7 @@ apiRouter.get('/wordpress_memberships', verifyToken, async (req, res) => {
 apiRouter.get('/allowed_apps', verifyToken, async (req, res) => {
   try {
     const allowed_apps = await new Promise((resolve, reject) => {
-      db.all('SELECT id, server_name, membership_id, allowed_apps FROM matchings', [], (err, rows) => {
+      db.all('SELECT id, server_name, membership_id, allowed_apps, frog FROM matchings', [], (err, rows) => {
         if (err) reject(err);
         resolve(rows);
       });
@@ -335,9 +336,10 @@ apiRouter.get('/allowed_apps', verifyToken, async (req, res) => {
         return {
           server_name: app.server_name,
           membership_id: parseInt(app.membership_id),
-          allowed_apps: JSON.parse(app.allowed_apps)
+          allowed_apps: JSON.parse(app.allowed_apps),
+          frog: app.frog === 1 ? true : false
         };
-      })
+      }),
     });
   } catch (error) {
     console.error('Get allowed apps error:', error);
@@ -370,8 +372,8 @@ apiRouter.put('/allowed_apps', verifyToken, async (req, res) => {
         // Insert new record
         await new Promise((resolve, reject) => {
           db.run(
-            'INSERT INTO matchings (server_name, membership_id, allowed_apps) VALUES (?, ?, ?)',
-            [app.server_name, app.membership_id, allowedAppsString],
+            'INSERT INTO matchings (server_name, membership_id, allowed_apps, frog) VALUES (?, ?, ?, ?)',
+            [app.server_name, app.membership_id, allowedAppsString, app.frog],
             (err) => {
               if (err) reject(err);
               resolve();
@@ -384,8 +386,8 @@ apiRouter.put('/allowed_apps', verifyToken, async (req, res) => {
       // Update existing record
       await new Promise((resolve, reject) => {
         db.run(
-          'UPDATE matchings SET allowed_apps = ? WHERE server_name = ? AND membership_id = ?',
-          [allowedAppsString, app.server_name, app.membership_id],
+          'UPDATE matchings SET allowed_apps = ?, frog = ? WHERE server_name = ? AND membership_id = ?',
+          [allowedAppsString, app.frog, app.server_name, app.membership_id],
           (err) => {
             if (err) reject(err);
             resolve();
@@ -395,7 +397,7 @@ apiRouter.put('/allowed_apps', verifyToken, async (req, res) => {
     }
 
     const updatedAllowedApps = await new Promise((resolve, reject) => {
-      db.all('SELECT id, server_name, membership_id, allowed_apps FROM matchings', [], (err, rows) => {
+      db.all('SELECT id, server_name, membership_id, allowed_apps, frog FROM matchings', [], (err, rows) => {
         if (err) reject(err);
         resolve(rows);
       });
@@ -407,7 +409,8 @@ apiRouter.put('/allowed_apps', verifyToken, async (req, res) => {
         return {
           server_name: app.server_name,
           membership_id: parseInt(app.membership_id),
-          allowed_apps: JSON.parse(app.allowed_apps)
+          allowed_apps: JSON.parse(app.allowed_apps),
+          frog: app.frog === 1 ? true : false
         };
       })
     });
