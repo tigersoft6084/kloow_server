@@ -13,7 +13,7 @@ const app = express();
 const PORT = 3001;
 
 // Middleware
-app.use(bodyParser.json({ limit: '1kb' })); // Limit payload size for security
+app.use(bodyParser.json({ limit: '10kb' })); // Limit payload size for security
 app.use(
   cors({
     origin: 'https://kloow.com', // Adjust to your frontend's domain/port
@@ -36,8 +36,6 @@ apiRouter.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Missing required fields: username or password' });
     }
 
-    let result = null;
-
     let servers = await new Promise((resolve, reject) => {
       db.all('SELECT domain, membership_key FROM servers where is_active = 1 and type = "wordpress"', [], (err, rows) => {
         if (err) reject(err);
@@ -45,42 +43,20 @@ apiRouter.post('/login', async (req, res) => {
       });
     });
 
+    let userRole = 'user';
+    let membershipInfo = [];
     for (const server of servers) {
       const { domain, membership_key } = server;
       if (domain && membership_key) {
         const maserverResult = await fetchUserData(log, pwd, domain, membership_key);
         if (maserverResult.success) {
-          const { uid, username, role, membership_id, membership_name, membership_expire_time } = maserverResult.user;
-          // Generate access token
-          const accessToken = jwt.sign(
-            { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type: 'wordpress' },
-            JWT_SECRET,
-            {
-              expiresIn: '15m'
-            }
-          );
-
-          // Generate refresh token
-          const refreshToken = jwt.sign(
-            { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type: 'wordpress' },
-            JWT_REFRESH_SECRET,
-            {
-              expiresIn: '7d'
-            }
-          );
-          result = {
-            authentication_success: true,
-            accessToken,
-            refreshToken,
-            user: { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type: 'wordpress' }
-          };
+          const { uid, username, role, membershipDetails } = maserverResult.user;
+          membershipInfo.push({ uid, username, role, domain, membershipDetails, type: 'wordpress' });
+          if (role === 'admin') {
+            userRole = 'admin';
+          }
         }
       }
-    }
-
-    if (result) {
-      res.json(result);
-      return;
     }
 
     servers = await new Promise((resolve, reject) => {
@@ -105,38 +81,45 @@ apiRouter.post('/login', async (req, res) => {
 
         if (loginResult?.token) {
           const uid = loginResult?.user?.id;
+          const membershipDetails = [
+            {
+              level_id: 0,
+              label: 'Kloow',
+              expire_time: '2100-12-31 23:59:59'
+            }
+          ]
           const username = log;
-          const membership_id = 0;
-          const membership_name = 'Kloow';
-          const membership_expire_time = '2100-12-31 23:59:59';
-          // Generate access token
-          const accessToken = jwt.sign(
-            { uid, username, role: 'user', domain, membership_id, membership_name, membership_expire_time, type: 'nextjs' },
-            JWT_SECRET,
-            {
-              expiresIn: '15m'
-            }
-          );
-
-          // Generate refresh token
-          const refreshToken = jwt.sign(
-            { uid, username, role: 'user', domain, membership_id, membership_name, membership_expire_time, type: 'nextjs' },
-            JWT_REFRESH_SECRET,
-            {
-              expiresIn: '7d'
-            }
-          );
-          result = {
-            authentication_success: true,
-            accessToken,
-            refreshToken,
-            user: { uid, username, role: 'user', domain, membership_id, membership_name, membership_expire_time, type: 'nextjs' }
-          };
+          if (loginResult?.user?.role === 'admin') {
+            userRole = 'admin'
+          }
+          membershipInfo.push({ uid, username, role: loginResult?.user?.role ?? 'user', domain, membershipDetails, type: 'nextjs' });
         }
       }
     }
 
-    if (result) {
+    if (membershipInfo.length > 0) {
+      const accessToken = jwt.sign(
+        { username: log, role: userRole, membershipInfo },
+        JWT_SECRET,
+        {
+          expiresIn: '15m'
+        }
+      );
+
+      const refreshToken = jwt.sign(
+        { username: log, role: userRole, membershipInfo },
+        JWT_REFRESH_SECRET,
+        {
+          expiresIn: '7d'
+        }
+      );
+
+      const result = {
+        authentication_success: true,
+        accessToken,
+        refreshToken,
+        user: { username: log, role: userRole, membershipInfo }
+      }
       res.json(result);
     } else {
       res.status(404).json({ message: 'Invalid credentials' });
@@ -158,15 +141,30 @@ apiRouter.post('/refresh-token', async (req, res) => {
   try {
     const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
 
-    const { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type } = decoded;
+    const { username, role, membershipInfo } = decoded;
 
-    if (new Date(membership_expire_time) < new Date()) {
+    const newMembershipInfo = membershipInfo
+      .map(member => {
+        // Filter out expired memberships
+        const filteredDetails = member.membershipDetails.filter(
+          m => new Date(m.expire_time) >= new Date()
+        );
+
+        return {
+          ...member,
+          membershipDetails: filteredDetails,
+        };
+      })
+      // Remove members with no valid membership left
+      .filter(member => member.membershipDetails.length > 0);
+
+    if (newMembershipInfo.length <= 0) {
       return res.status(403).json({ message: 'Membership is expired. Please renew your subscription.' });
     }
 
     // Generate new access token
     const newAccessToken = jwt.sign(
-      { uid, username, role, domain, membership_id, membership_name, membership_expire_time, type },
+      { username, role, membershipInfo: newMembershipInfo },
       JWT_SECRET,
       {
         expiresIn: '15m'
@@ -176,7 +174,7 @@ apiRouter.post('/refresh-token', async (req, res) => {
     res.json({
       authentication_success: true,
       accessToken: newAccessToken,
-      user: { uid, username, domain, membership_id, membership_name, membership_expire_time, type }
+      user: { username, role, membershipInfo: newMembershipInfo }
     });
   } catch (error) {
     console.error('Refresh token verification message:', error);
@@ -186,29 +184,13 @@ apiRouter.post('/refresh-token', async (req, res) => {
 
 // --- Helper function to build enriched app list ---
 async function getAppListData(user) {
-  const { username, domain, membership_id, type, role, uid } = user;
+  const { username, role, membershipInfo } = user;
 
-  // Step 1: Fetch app list from external API
-  const response = await fetch('https://debicaserver.click/api/apps/get-apps', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      rootUrl: type === 'wordpress' ? domain : null,
-      id: uid,
-      name: username,
-      role
-    })
-  });
+  let allowed_apps = [];
 
-  if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
-  const data = await response.json();
-  const appList = (data.appList || []).map((app) => ({ ...app, port: 0 }));
-
-  // Step 2: Fetch DB data
-  const [containers, images, logs, favorites, allowed_apps] = await Promise.all([
+  const [containers, images, logs, favorites] = await Promise.all([
     new Promise((resolve, reject) => {
-      db.all('SELECT * FROM containers WHERE username = ? AND auth_server = ? AND port != ?', [hashId(username), domain, 0], (err, rows) =>
+      db.all('SELECT * FROM containers WHERE username = ? AND port != ?', [hashId(username), 0], (err, rows) =>
         err ? reject(err) : resolve(rows)
       );
     }),
@@ -216,24 +198,70 @@ async function getAppListData(user) {
       db.all('SELECT app_name, thumb_path, logo_path FROM server_images', [], (err, rows) => (err ? reject(err) : resolve(rows)));
     }),
     new Promise((resolve, reject) => {
-      db.all('SELECT project_id, updated_at FROM logs WHERE username = ? AND auth_server = ?', [hashId(username), domain], (err, rows) =>
+      db.all('SELECT project_id, updated_at FROM logs WHERE username = ?', [hashId(username)], (err, rows) =>
         err ? reject(err) : resolve(rows)
       );
     }),
     new Promise((resolve, reject) => {
-      db.all('SELECT project_id FROM favorites WHERE username = ? AND auth_server = ?', [hashId(username), domain], (err, rows) =>
+      db.all('SELECT project_id FROM favorites WHERE username = ?', [hashId(username)], (err, rows) =>
         err ? reject(err) : resolve(rows)
       );
     }),
-    new Promise((resolve, reject) => {
-      db.get('SELECT allowed_apps FROM matchings WHERE server_name = ? AND membership_id = ?', [domain, membership_id], (err, row) =>
-        err ? reject(err) : resolve(row ? JSON.parse(row.allowed_apps) : [])
-      );
-    })
   ]);
 
+  let wholeAppList = [];
+  await Promise.all(
+    membershipInfo.map(async membershipData => {
+      const { uid, username, role, domain, membershipDetails, type } = membershipData;
+
+      // Step 1: Fetch app list from external API
+      const response = await fetch('https://debicaserver.click/api/apps/get-apps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rootUrl: type === 'wordpress' ? domain : null,
+          id: uid,
+          name: username,
+          role
+        })
+      });
+                                                                                                                                                                                                                                                                                                                                          
+      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+
+      const data = await response.json();
+      const appList = (data.appList || []).map((app) => ({ ...app, port: 0 }));
+      wholeAppList = Array.from(
+        new Map(
+          [...wholeAppList, ...appList].map(app => [app.title, app])
+        ).values()
+      );
+
+      // Step 2: Fetch DB data
+
+      if (type === 'wordpress') {
+        await Promise.all(
+          membershipDetails.map(async (membership) => {
+            const membership_allowed_apps = await new Promise((resolve, reject) => {
+              db.get('SELECT allowed_apps FROM matchings WHERE server_name = ? AND membership_id = ?', [domain, membership.level_id], (err, row) =>
+                err ? reject(err) : resolve(row ? JSON.parse(row.allowed_apps) : [])
+              );
+            });
+            allowed_apps.push(...membership_allowed_apps);
+          })
+        );
+      } else {
+        allowed_apps = Array.from(
+          new Set([
+            ...allowed_apps,
+            ...appList.map(app => app.title)
+          ])
+        );
+      }
+    })
+  );
+
   // Step 3: Merge everything
-  const enrichedApps = appList.map((app) => {
+  const enrichedApps = wholeAppList.map((app) => {
     const matchedContainer = containers.find((row) => row.project_id === app.id);
     const matchedImage = images.find((img) => img.app_name === app.title);
     const matchLog = logs.find((log) => log.project_id === app.id);
@@ -241,13 +269,12 @@ async function getAppListData(user) {
 
     return {
       ...app,
-      domain,
       port: matchedContainer ? matchedContainer.port : 0,
       thumbPath: matchedImage ? matchedImage.thumb_path : '',
       logoPath: matchedImage ? matchedImage.logo_path : '',
       lastAccessed: matchLog ? matchLog.updated_at : null,
       isFavorite: !!isFavorite,
-      isAllowed: type === 'wordpress' ? (role === 'admin' ? true : allowed_apps.includes(app.title)) : true
+      isAllowed: role === 'admin' ? true : allowed_apps.includes(app.title)
     };
   });
 
@@ -260,41 +287,66 @@ apiRouter.get('/app_list', verifyToken, async (req, res) => {
     const appList = await getAppListData(req.user);
     res.json({ appList });
   } catch (error) {
-    console.error(`Error fetching app list: ${error.message}`);
+    console.error(`Error fetching app list: ${error}`);
     res.status(500).json({ message: 'Failed to fetch app list' });
   }
 });
 
 apiRouter.get('/frog_status', verifyToken, async (req, res) => {
   try {
-    const { domain, membership_id, role } = req.user;
+    const { role, membershipInfo } = req.user;
 
     if (role === "admin") {
-      res.json({ frog: true });
-    } else {
-      const frog = await new Promise((resolve, reject) => {
-        db.get('SELECT frog FROM matchings WHERE server_name = ? AND membership_id = ?', [domain, membership_id], (err, row) =>
-          err ? reject(err) : resolve(row ? row.frog : false)
-        );
-      });
-      res.json({ frog });
+      return res.json({ frog: true });
     }
+
+    let frog = false;
+
+    // Collect promises
+    const promises = [];
+
+    for (const membershipData of membershipInfo) {
+      const { domain, membershipDetails } = membershipData;
+
+      for (const membership of membershipDetails) {
+        const p = new Promise((resolve, reject) => {
+          db.get(
+            'SELECT frog FROM matchings WHERE server_name = ? AND membership_id = ?',
+            [domain, membership.level_id],
+            (err, row) => {
+              if (err) return reject(err);
+
+              if (row?.frog === 1) frog = true;
+              resolve();
+            }
+          );
+        });
+
+        promises.push(p);
+      }
+    }
+
+    // Wait for all DB queries
+    await Promise.all(promises);
+
+    return res.json({ frog });
+
   } catch (error) {
     console.error(`Error fetching frog status: ${error.message}`);
-    res.status(500).json({ message: 'Failed to fetch frog status' });
+    return res.status(500).json({ message: 'Failed to fetch frog status' });
   }
-})
+});
 
 // Run app endpoint
 apiRouter.post('/run_app', verifyToken, async (req, res) => {
   try {
     const { id, url, proxyServer } = req.body;
-    const { username, domain } = req.user;
+    const { username } = req.user;
     // check for an already running container
     const existing = await new Promise((resolve, reject) => {
       db.get(
-        'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
-        [hashId(username), domain, id, 0],
+        'SELECT * FROM containers WHERE username = ? and project_id = ? and port != ?',
+        [hashId(username), id, 0],
         (err, row) => (err ? reject(err) : resolve(row))
       );
     });
@@ -345,8 +397,8 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
     // Insert or update the DB record (find row with port = 0)
     const maybeRow = await new Promise((resolve, reject) => {
       db.get(
-        'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port = ?',
-        [hashId(username), domain, id, 0],
+        'SELECT * FROM containers WHERE username = ? and project_id = ? and port = ?',
+        [hashId(username), id, 0],
         (err, row) => (err ? reject(err) : resolve(row))
       );
     });
@@ -362,8 +414,8 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
     } else {
       await new Promise((resolve, reject) => {
         db.run(
-          'INSERT INTO containers (username, auth_server, project_id, container_id, port) VALUES (?, ?, ?, ?, ?)',
-          [hashId(username), domain, id, runStdout, freePort],
+          'INSERT INTO containers (username, project_id, container_id, port) VALUES (?, ?, ?, ?, ?)',
+          [hashId(username), id, runStdout, freePort],
           (err) => (err ? reject(err) : resolve())
         );
       });
@@ -380,12 +432,12 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
 apiRouter.post('/stop_app', verifyToken, async (req, res) => {
   try {
     const { id } = req.body;
-    const { username, domain } = req.user;
+    const { username } = req.user;
 
     const row = await new Promise((resolve, reject) => {
       db.get(
-        'SELECT * FROM containers WHERE username = ? and auth_server = ? and project_id = ? and port != ?',
-        [hashId(username), domain, id, 0],
+        'SELECT * FROM containers WHERE username = ? and project_id = ? and port != ?',
+        [hashId(username), id, 0],
         (err, row) => (err ? reject(err) : resolve(row))
       );
     });
@@ -424,19 +476,19 @@ apiRouter.post('/stop_app', verifyToken, async (req, res) => {
 apiRouter.post('/logs', verifyToken, async (req, res) => {
   try {
     const { id } = req.body;
-    const { username, domain } = req.user;
+    const { username } = req.user;
     const now = new Date().toISOString();
 
     // Step 1: Update or insert log
     await new Promise((resolve, reject) => {
-      db.get('SELECT * FROM logs WHERE username = ? AND auth_server = ? AND project_id = ?', [hashId(username), domain, id], (err, row) => {
+      db.get('SELECT * FROM logs WHERE username = ? AND project_id = ?', [hashId(username), id], (err, row) => {
         if (err) return reject(err);
         if (row) {
           db.run('UPDATE logs SET updated_at = ? WHERE id = ?', [now, row.id], (err) => (err ? reject(err) : resolve()));
         } else {
           db.run(
-            'INSERT INTO logs (username, auth_server, project_id, updated_at) VALUES (?, ?, ?, ?)',
-            [hashId(username), domain, id, now],
+            'INSERT INTO logs (username, project_id, updated_at) VALUES (?, ?, ?)',
+            [hashId(username), id, now],
             (err) => (err ? reject(err) : resolve())
           );
         }
@@ -458,14 +510,13 @@ apiRouter.post('/logs', verifyToken, async (req, res) => {
 apiRouter.post('/favorites', verifyToken, async (req, res) => {
   try {
     const { id } = req.body;
-    const { username, domain } = req.user;
-    const now = new Date().toISOString();
+    const { username } = req.user;
 
     // Step 1: Toggle favorite (add if not exist, remove if exists)
     const isFavorite = await new Promise((resolve, reject) => {
       db.get(
-        'SELECT * FROM favorites WHERE username = ? AND auth_server = ? AND project_id = ?',
-        [hashId(username), domain, id],
+        'SELECT * FROM favorites WHERE username = ? AND project_id = ?',
+        [hashId(username), id],
         (err, row) => {
           if (err) return reject(err);
 
@@ -477,7 +528,7 @@ apiRouter.post('/favorites', verifyToken, async (req, res) => {
             });
           } else {
             // Doesn't exist — add it
-            db.run('INSERT INTO favorites (username, auth_server, project_id) VALUES (?, ?, ?)', [hashId(username), domain, id], (err) => {
+            db.run('INSERT INTO favorites (username, project_id) VALUES (?, ?, ?)', [hashId(username), id], (err) => {
               if (err) return reject(err);
               resolve(true); // Added
             });

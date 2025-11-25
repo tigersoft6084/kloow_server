@@ -76,7 +76,6 @@ db.serialize(() => {
       CREATE TABLE IF NOT EXISTS containers (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           username TEXT NOT NULL,
-          auth_server TEXT NOT NULL,
           project_id TEXT NOT NULL,
           container_id TEXT NOT NULL,
           port INTEGER NOT NULL DEFAULT 0,
@@ -97,7 +96,6 @@ db.serialize(() => {
       CREATE TABLE IF NOT EXISTS logs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           username TEXT NOT NULL,
-          auth_server TEXT NOT NULL,
           project_id TEXT NOT NULL,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -116,7 +114,6 @@ db.serialize(() => {
       CREATE TABLE IF NOT EXISTS favorites (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           username TEXT NOT NULL,
-          auth_server TEXT NOT NULL,
           project_id TEXT NOT NULL
       )
     `,

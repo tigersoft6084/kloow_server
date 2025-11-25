@@ -108,26 +108,13 @@ const fetchUserData = async (log, pwd, domain, membership_key) => {
       });
     const membershipDetails = await Promise.all(fetchPromises);
 
-    let membership = null;
-
-    // get the membership with the highest price
-    for (const detail of membershipDetails) {
-      if (detail && (!membership || parseFloat(detail.price) > parseFloat(membership.price))) {
-        membership = detail;
-      }
-    }
-
     return {
       success: true,
       user: {
         uid: loginResult.data.uid,
         role: loginResult.data.roles.includes('administrator') ? 'admin' : 'user',
         username: log,
-        membership_id: membership?.level_id || 0,
-        membership_name: membership?.label || '-',
-        membership_expire_time: loginResult.data.roles.includes('administrator')
-          ? '2100-12-31 23:59:59'
-          : membership?.expire_time || '2000-12-31 23:59:59'
+        membershipDetails
       }
     };
   } catch (error) {
