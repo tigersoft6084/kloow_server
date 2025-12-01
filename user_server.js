@@ -266,6 +266,7 @@ async function getAppListData(user) {
     const matchedImage = images.find((img) => img.app_name === app.title);
     const matchLog = logs.find((log) => log.project_id === app.id);
     const isFavorite = favorites.find((log) => log.project_id === app.id);
+    app.initUrl = role === 'admin' ? app.initUrl : allowed_apps.includes(app.title) ? app.initUrl : '';
 
     return {
       ...app,
@@ -384,7 +385,7 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
     let runStdout;
 
     try {
-      const cmd = [`${hashId(username)}-${domain}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, freePort].join(' ');
+      const cmd = [`${hashId(username)}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, freePort].join(' ');
       const { stdout } = await execAsync(`./kasm/run.sh ${cmd}`);
       runStdout = stdout.trim();
     } catch (err) {
@@ -414,7 +415,7 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
     } else {
       await new Promise((resolve, reject) => {
         db.run(
-          'INSERT INTO containers (username, project_id, container_id, port) VALUES (?, ?, ?, ?, ?)',
+          'INSERT INTO containers (username, project_id, container_id, port) VALUES (?, ?, ?, ?)',
           [hashId(username), id, runStdout, freePort],
           (err) => (err ? reject(err) : resolve())
         );
