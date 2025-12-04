@@ -164,6 +164,24 @@ db.serialize(() => {
       }
     }
   );
+
+  db.run(
+    `
+      CREATE TABLE IF NOT EXISTS frog_version (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        version TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    (err) => {
+      if (err) {
+        console.error('Error creating frog_version table:', err.message);
+      } else {
+        console.log('Frog_version table initialized');
+      }
+    }
+  )
 });
 
 module.exports = db;

@@ -420,6 +420,84 @@ apiRouter.put('/allowed_apps', verifyToken, async (req, res) => {
   }
 });
 
+apiRouter.get('/frog_versions', verifyToken, async (req, res) => {
+  try {
+    const frogVersions = await new Promise((resolve, reject) => {
+      db.all('SELECT id, name, version FROM frog_version ORDER BY created_at DESC', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
+    });
+    console.log(frogVersions);
+    res.json({ frog_versions: frogVersions });
+  } catch (error) {
+    console.error('Get frog versions error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+apiRouter.put('/frog_versions', verifyToken, async (req, res) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+
+  const { frog_versions } = req.body;
+
+  for (const fv of frog_versions) {
+    const name = fv.name;
+    const version = fv.version;
+
+    if (!name || !version) {
+      return res.status(400).json({ message: 'Name and version are required for all frog versions' });
+    }
+
+    if (!name || !version) {
+      return res.status(400).json({ message: 'Name and version are required' });
+    }
+
+    try {
+      // UPSERT (insert or update)
+      await new Promise((resolve, reject) => {
+        db.run(
+          `
+          INSERT INTO frog_version (name, version)
+          VALUES (?, ?)
+          ON CONFLICT(name) DO UPDATE SET
+            version = excluded.version
+          `,
+          [name, version],
+          (err) => {
+            if (err) reject(err);
+            resolve();
+          }
+        );
+      });
+
+      const frogVersions = await new Promise((resolve, reject) => {
+        db.all(
+          'SELECT id, name, version FROM frog_version ORDER BY created_at DESC',
+          [],
+          (err, rows) => {
+            if (err) reject(err);
+            resolve(rows);
+          }
+        );
+      });
+
+      console.log(frogVersions);
+
+      res.json({
+        message: 'Frog version saved successfully',
+        frog_versions: frogVersions
+      });
+    } catch (error) {
+      console.error('Add frog version error:', error);
+      res.status(500).json({ message: 'Internal server error' });
+    }
+  }
+});
+
+
 // Mount the router with the prefix
 app.use('/api/v1', apiRouter);
 

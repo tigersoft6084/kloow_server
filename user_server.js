@@ -296,42 +296,57 @@ apiRouter.get('/app_list', verifyToken, async (req, res) => {
 apiRouter.get('/frog_status', verifyToken, async (req, res) => {
   try {
     const { role, membershipInfo } = req.user;
-
-    if (role === "admin") {
-      return res.json({ frog: true });
-    }
-
+    
     let frog = false;
 
-    // Collect promises
-    const promises = [];
-
-    for (const membershipData of membershipInfo) {
-      const { domain, membershipDetails } = membershipData;
-
-      for (const membership of membershipDetails) {
-        const p = new Promise((resolve, reject) => {
-          db.get(
-            'SELECT frog FROM matchings WHERE server_name = ? AND membership_id = ?',
-            [domain, membership.level_id],
-            (err, row) => {
-              if (err) return reject(err);
-
-              if (row?.frog === 1) frog = true;
-              resolve();
-            }
-          );
-        });
-
-        promises.push(p);
+    if (role === "admin") {
+      frog = true;
+    } else {
+      // Collect promises
+      const promises = [];
+  
+      for (const membershipData of membershipInfo) {
+        const { domain, membershipDetails } = membershipData;
+  
+        for (const membership of membershipDetails) {
+          const p = new Promise((resolve, reject) => {
+            db.get(
+              'SELECT frog FROM matchings WHERE server_name = ? AND membership_id = ?',
+              [domain, membership.level_id],
+              (err, row) => {
+                if (err) return reject(err);
+  
+                if (row?.frog === 1) frog = true;
+                resolve();
+              }
+            );
+          });
+  
+          promises.push(p);
+        }
       }
+  
+      // Wait for all DB queries
+      await Promise.all(promises);
     }
 
-    // Wait for all DB queries
-    await Promise.all(promises);
+    if (frog) {
+      const frogVersions = await new Promise((resolve, reject) => {
+        db.all('SELECT id, name, version FROM frog_version ORDER BY created_at DESC', [], (err, rows) => {
+          if (err) reject(err);
+          resolve(rows);
+        });
+      });
 
-    return res.json({ frog });
+      let frog_versions = {};
+      frogVersions.forEach(frogVersion => {
+        frog_versions[frogVersion.name] = frogVersion.version;
+      });
 
+      return res.json({ frog: frog_versions })
+    } else {
+      return res.json({ frog: { seo_spider: null, log_analyser: null } })
+    }
   } catch (error) {
     console.error(`Error fetching frog status: ${error.message}`);
     return res.status(500).json({ message: 'Failed to fetch frog status' });
