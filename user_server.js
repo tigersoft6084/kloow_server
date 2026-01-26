@@ -225,7 +225,7 @@ async function getAppListData(user) {
           role
         })
       });
-                                                                                                                                                                                                                                                                                                                                          
+
       if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
 
       const data = await response.json();
@@ -293,10 +293,48 @@ apiRouter.get('/app_list', verifyToken, async (req, res) => {
   }
 });
 
+apiRouter.post('/check-seocromom-health', verifyToken, async (req, res) => {
+  const healthStatuses = {};
+  const { role } = req.user;
+  const { serverSelection } = req.body;
+
+  for (const appId of Object.keys(serverSelection)) {
+    const serverIp = serverSelection[appId];
+
+    try {
+      const response = await fetch(`http://${serverIp}:3000/check-seocromom-health`);
+
+      if (!response.ok) {
+        throw new Error(`Health check failed for ${appId}`);
+      }
+
+      // Admins always see healthy
+      if (role === 'admin') {
+        healthStatuses[appId] = true;
+        continue;
+      }
+
+      const data = await response.json();
+
+      let healthStatus = Boolean(data.mongodb_status) && Boolean(data.login_status);
+
+      if (typeof data.subscription_status === 'boolean') {
+        healthStatus = healthStatus && data.subscription_status;
+      }
+
+      healthStatuses[appId] = healthStatus;
+    } catch (error) {
+      healthStatuses[appId] = false;
+    }
+  }
+
+  res.json({ healthStatuses });
+});
+
 apiRouter.get('/frog_status', verifyToken, async (req, res) => {
   try {
     const { role, membershipInfo } = req.user;
-    
+
     let frog = false;
 
     if (role === "admin") {
@@ -304,10 +342,10 @@ apiRouter.get('/frog_status', verifyToken, async (req, res) => {
     } else {
       // Collect promises
       const promises = [];
-  
+
       for (const membershipData of membershipInfo) {
         const { domain, membershipDetails } = membershipData;
-  
+
         for (const membership of membershipDetails) {
           const p = new Promise((resolve, reject) => {
             db.get(
@@ -315,17 +353,17 @@ apiRouter.get('/frog_status', verifyToken, async (req, res) => {
               [domain, membership.level_id],
               (err, row) => {
                 if (err) return reject(err);
-  
+
                 if (row?.frog === 1) frog = true;
                 resolve();
               }
             );
           });
-  
+
           promises.push(p);
         }
       }
-  
+
       // Wait for all DB queries
       await Promise.all(promises);
     }
