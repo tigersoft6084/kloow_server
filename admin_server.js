@@ -292,14 +292,18 @@ apiRouter.get('/wordpress_memberships', verifyToken, async (req, res) => {
 
     const tmpResult = [];
     for (const server of wordpressServers) {
-      const membershipResponse = await fetch(
-        `https://${server.domain}/?ihc_action=api-gate&ihch=${server.membership_key}&action=list_levels`
-      );
-      const memberships = await membershipResponse.json();
-      tmpResult.push({
-        ...server,
-        memberships: memberships.response || []
-      });
+      try {
+        const membershipResponse = await fetch(
+          `https://${server.domain}/?ihc_action=api-gate&ihch=${server.membership_key}&action=list_levels`
+        );
+        const memberships = await membershipResponse.json();
+        tmpResult.push({
+          ...server,
+          memberships: memberships.response || []
+        });
+      } catch (error) {
+        console.log(error);
+      }
     }
 
     const result = [];
