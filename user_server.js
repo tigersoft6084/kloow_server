@@ -102,7 +102,7 @@ apiRouter.post('/login', async (req, res) => {
         { username: log, role: userRole, membershipInfo },
         JWT_SECRET,
         {
-          expiresIn: '15m'
+          expiresIn: '1d'
         }
       );
 
@@ -167,7 +167,7 @@ apiRouter.post('/refresh-token', async (req, res) => {
       { username, role, membershipInfo: newMembershipInfo },
       JWT_SECRET,
       {
-        expiresIn: '15m'
+        expiresIn: '1d'
       }
     );
 
