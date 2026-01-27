@@ -582,7 +582,7 @@ apiRouter.post('/favorites', verifyToken, async (req, res) => {
             });
           } else {
             // Doesn't exist — add it
-            db.run('INSERT INTO favorites (username, project_id) VALUES (?, ?, ?)', [hashId(username), id], (err) => {
+            db.run('INSERT INTO favorites (username, project_id) VALUES (?, ?)', [hashId(username), id], (err) => {
               if (err) return reject(err);
               resolve(true); // Added
             });
