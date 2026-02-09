@@ -844,7 +844,11 @@ apiRouter.delete('/app_info', verifyToken, async (req, res) => {
   }
 });
 
-apiRouter.post('/set', async (req, res) => {
+apiRouter.post('/set', verifyToken, async (req, res) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+
   const { title, server_ip, old_username, new_username, password, limitsField } = req.body;
 
   if (!title || !server_ip || !password || limitsField === undefined) {
@@ -889,9 +893,35 @@ apiRouter.post('/set', async (req, res) => {
 
   } catch (error) {
     console.error('Forward set params error:', error);
-    return res.status(500).json({ message: 'Failed to forward request' });
+    return res.status(500).json({ message: 'Internal Server Error' });
   }
 });
+
+apiRouter.post('/credit', verifyToken, async (req, res) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+
+  const { title, server_ip, username } = req.body;
+
+  if (!title || !server_ip || !username) {
+    return res.status(400).json({ message: 'Title, Server IP, Username reqired'});
+  }
+
+  try {
+    const targetUrl = `http://${server_ip}:3000/get-seocromom-credit?name=${title.toLowerCase()}&user=${username}`;
+
+    const response = await fetch(targetUrl);
+    const contentType = response.headers.get('content-type') || 'text/plain; charset=utf-8';
+    const responseBody = await response.text();
+
+    res.set('Content-Type', contentType);
+    return res.status(response.status).send(responseBody);
+  } catch (error) {
+    console.error('Failed to get credit:', error);
+    return res.status(500).json({ message: 'Internal Server Error'})
+  }
+})
 
 // Error handling middleware
 app.use((err, _req, res, _next) => {
