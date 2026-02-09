@@ -728,7 +728,7 @@ async function getAppListData(user) {
     const matchedContainer = containers.find((row) => row.project_id === app.id);
     for (const server of app.servers) {
       const credentials = await new Promise((resolve, reject) => {
-        db.all('SELECT * FROM account_info WHERE name = ? AND server_ip = ?', [hashId(app.title), server], (err, rows) =>
+        db.all('SELECT * FROM account_info WHERE name = ? AND server_ip = ?', [app.title.toLowerCase(), server], (err, rows) =>
           err ? reject(err) : resolve(rows)
         );
       });
@@ -763,57 +763,14 @@ apiRouter.get('/app_info', verifyToken, async (req, res) => {
   }
 });
 
-// App list endpoint
-apiRouter.post('/app_info', verifyToken, async (req, res) => {
-  if (!req.user.is_admin) {
-    return res.status(403).json({ message: 'Admin access required' });
-  }
-
-  const { name, server, credentials } = req.body;
-  if (!name || !server || !credentials) {
-    return res.status(400).json({ message: 'Name, server and credentials required' });
-  }
-
-  try {
-    const accountInfo = await new Promise((resolve, reject) => {
-      db.get('SELECT * FROM account_info WHERE server_ip = ?', [server], (err, row) => {
-        if (err) reject(err);
-        resolve(row);
-      });
-    });
-
-    if (accountInfo) {
-      return res.status(400).json({ message: 'Account info with this server ip already exists' });
-    }
-
-    const normalized = normalizeCredentials(credentials);
-    await new Promise((resolve, reject) => {
-      db.run('INSERT INTO account_info (name, server_ip, credentials) VALUES (?, ?, ?)', [name, server, JSON.stringify(normalized)], (err) => {
-        if (err) reject(err);
-        resolve();
-      });
-    });
-    const accountInfos = await new Promise((resolve, reject) => {
-      db.all('SELECT id, name, server_ip, credentials, created_at, updated_at FROM account_info', [], (err, rows) => {
-        if (err) reject(err);
-        resolve(rows);
-      });
-    });
-    res.status(201).json({ message: 'Server added successfully', accountInfos });
-  } catch (error) {
-    console.error('Add account info error:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
-
 // App list endpoint – update credentials for an account (body: title or name, server_ip, credentials)
 apiRouter.put('/app_info', verifyToken, async (req, res) => {
   if (!req.user.is_admin) {
     return res.status(403).json({ message: 'Admin access required' });
   }
 
-  const { name, title, server_ip, credentials } = req.body;
-  const accountName = name || (title ? hashId(title) : null);
+  const { title, server_ip, credentials } = req.body;
+  const accountName = title.toLowerCase();
 
   if (!accountName || !server_ip || !Array.isArray(credentials)) {
     return res.status(400).json({ message: 'title (or name), server_ip and credentials array required' });
@@ -865,8 +822,8 @@ apiRouter.delete('/app_info', verifyToken, async (req, res) => {
     return res.status(403).json({ message: 'Admin access required' });
   }
 
-  const { name, title, server_ip } = req.body;
-  const accountName = name || (title ? hashId(title) : null);
+  const { title, server_ip } = req.body;
+  const accountName = title.toLowerCase();
 
   if (!accountName || !server_ip) {
     return res.status(400).json({ message: 'title (or name) and server_ip required' });
