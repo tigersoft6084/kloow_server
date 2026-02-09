@@ -719,7 +719,6 @@ async function getAppListData(user) {
   if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
 
   const data = await response.json();
-  console.log(JSON.stringify(data, null, 2));
   const appList = (data.appList || []).filter((app) => app.account_pooling).map((app) => ({ ...app, port: 0 }));
 
   // Step 3: Merge everything
@@ -842,6 +841,55 @@ apiRouter.delete('/app_info', verifyToken, async (req, res) => {
   } catch (error) {
     console.error('Delete account info error:', error);
     res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+apiRouter.post('/set', async (req, res) => {
+  const { title, server_ip, old_username, new_username, password, limitsField } = req.body;
+
+  if (!title || !server_ip || !password || limitsField === undefined) {
+    return res.status(400).json({
+      message: 'title, server_ip, password, and limitsField are required'
+    });
+  }
+
+  const name = title.toLowerCase();
+
+  try {
+    const targetUrl = `http://5.161.87.62:3000/set-seocromom-params?name=${name}&old_user=${old_username ?? ""}&new_user=${new_username ?? ""}`;
+
+    const bodyParams = {}
+    bodyParams[`${name}Username`] = new_username ?? "";
+    bodyParams[`${name}Password`] = password;
+    if (limitsField && typeof limitsField === 'object') {
+      limitsField.forEach(limit => {
+        bodyParams[`${limit.name}`] = limit.value;
+      });
+    }
+
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(bodyParams)
+    });
+
+    if (response.ok) {
+      return res.status(200).json({
+        message: 'Request forwarded',
+        targetUrl
+      });
+    } else {
+      return res.status(500).json({
+        message: 'Please check proxy works now',
+        targetUrl
+      })
+    }
+
+  } catch (error) {
+    console.error('Forward set params error:', error);
+    return res.status(500).json({ message: 'Failed to forward request' });
   }
 });
 
