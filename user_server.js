@@ -271,8 +271,8 @@ async function getAppListData(user) {
     return {
       ...app,
       port: matchedContainer ? matchedContainer.port : 0,
-      thumbPath: matchedImage ? matchedImage.thumb_path : '',
-      logoPath: matchedImage ? matchedImage.logo_path : '',
+      thumbPath: matchedImage ? matchedImage.thumb_path.startsWith('/uploads/') ? `/api/v1${matchedImage.thumb_path}` : matchedImage.thumb_path : '',
+      logoPath: matchedImage ? matchedImage.logo_path.startsWith('/uploads/') ? `/api/v1${matchedImage.logo_path}` : matchedImage.logo_path : '',
       lastAccessed: matchLog ? matchLog.updated_at : null,
       isFavorite: !!isFavorite,
       isAllowed: role === 'admin' ? true : allowed_apps.includes(app.title)

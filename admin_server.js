@@ -8,7 +8,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-const { verifyToken, JWT_SECRET, JWT_REFRESH_SECRET } = require('./common');
+const { verifyToken, hashId, JWT_SECRET, JWT_REFRESH_SECRET } = require('./common');
 
 const app = express();
 const PORT = 8001;
@@ -502,13 +502,17 @@ apiRouter.put('/frog_versions', verifyToken, async (req, res) => {
 });
 
 
-// Mount the router with the prefix
-app.use('/api/v1', apiRouter);
-
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
+
+// Serve uploaded files under /api/v1/uploads so same-origin requests get image content
+apiRouter.use('/uploads', express.static(uploadDir));
+
+// Mount the router with the prefix
+app.use('/api/v1', apiRouter);
+
 // Configure Multer storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -541,12 +545,17 @@ apiRouter.get('/images', verifyToken, async (req, res) => {
   }
 
   try {
-    const images = await new Promise((resolve, reject) => {
-      db.all('SELECT id, app_name, thumb_path, logo_path FROM server_images', [], (err, rows) => {
+    const rows = await new Promise((resolve, reject) => {
+      db.all('SELECT id, app_name, thumb_path, logo_path FROM server_images', [], (err, r) => {
         if (err) reject(err);
-        resolve(rows);
+        resolve(r);
       });
     });
+    const images = rows.map((row) => ({
+      ...row,
+      thumb_path: row.thumb_path?.startsWith('/uploads/') ? `/api/v1${row.thumb_path}` : row.thumb_path,
+      logo_path: row.logo_path?.startsWith('/uploads/') ? `/api/v1${row.logo_path}` : row.logo_path
+    }));
     res.json({ images });
   } catch (error) {
     console.error('Get images error:', error);
@@ -574,9 +583,9 @@ apiRouter.delete('/images/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ message: 'Image record not found' });
     }
 
-    // Step 2: Delete the files if they exist
     const deleteFile = (filePath) => {
-      const fullPath = path.join(__dirname, filePath);
+      const rel = filePath?.replace(/^\/api\/v1\/uploads\//, '').replace(/^\/uploads\//, '') || path.basename(filePath);
+      const fullPath = path.join(uploadDir, rel);
       if (fs.existsSync(fullPath)) {
         fs.unlink(fullPath, (err) => {
           if (err) console.error(`Failed to delete file: ${fullPath}`, err);
@@ -632,10 +641,12 @@ apiRouter.post(
     }
 
     try {
+      const thumbPath = `/api/v1/uploads/${thumbFile.filename}`;
+      const logoPath = `/api/v1/uploads/${logoFile.filename}`;
       await new Promise((resolve, reject) => {
         db.run(
           'INSERT INTO server_images (app_name, thumb_path, logo_path) VALUES (?, ?, ?)',
-          [applicationName, `/uploads/${thumbFile.filename}`, `/uploads/${logoFile.filename}`],
+          [applicationName, thumbPath, logoPath],
           (err) => {
             if (err) reject(err);
             resolve();
@@ -670,6 +681,211 @@ apiRouter.get('/app_list', verifyToken, async (req, res) => {
   const data = await response.json();
   // Step 2: Return the app list
   res.json({ appList: data.appList });
+});
+
+// Normalize credentials to [username, password, domain_limit, keyword_limit]
+function normalizeCredentials(creds) {
+  if (!Array.isArray(creds)) return [];
+  return creds.map((c) => {
+    if (!Array.isArray(c) || c.length < 2) return c;
+    return [c[0], c[1], c[2] ?? 0, c[3] ?? 0];
+  });
+}
+
+// --- Helper function to build enriched app list ---
+async function getAppListData(user) {
+  const uid = user.id;
+  const username = user.username;
+  const role = user.is_admin ? "admin" : "user";
+
+  const containers = await new Promise((resolve, reject) => {
+    db.all('SELECT * FROM containers WHERE username = ? AND port != ?', [hashId(username), 0], (err, rows) =>
+      err ? reject(err) : resolve(rows)
+    );
+  });
+
+  // Step 1: Fetch app list from external API
+  const response = await fetch('https://debicaserver.click/api/apps/get-apps', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      rootUrl: "admin.kloow.com",
+      id: uid,
+      name: username,
+      role
+    })
+  });
+
+  if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+
+  const data = await response.json();
+  console.log(JSON.stringify(data, null, 2));
+  const appList = (data.appList || []).filter((app) => app.account_pooling).map((app) => ({ ...app, port: 0 }));
+
+  // Step 3: Merge everything
+  let enrichedApps = [];
+  for (const app of appList) {
+    const matchedContainer = containers.find((row) => row.project_id === app.id);
+    for (const server of app.servers) {
+      const credentials = await new Promise((resolve, reject) => {
+        db.all('SELECT * FROM account_info WHERE name = ? AND server_ip = ?', [hashId(app.title), server], (err, rows) =>
+          err ? reject(err) : resolve(rows)
+        );
+      });
+
+      const rawCreds = credentials[0] ? JSON.parse(credentials[0].credentials) : [];
+      enrichedApps.push({
+        id: app.id,
+        title: app.title,
+        server: server,
+        credentials: normalizeCredentials(rawCreds),
+        limitFields: app.limits,
+        initUrl: app.initUrl,
+        port: matchedContainer ? matchedContainer.port : 0
+      });
+    }
+  }
+
+  return enrichedApps;
+}
+
+// App list endpoint
+apiRouter.get('/app_info', verifyToken, async (req, res) => {
+  try {
+    if (!req.user.is_admin) {
+      return res.status(403).json({ message: 'Admin access required' });
+    }
+    const appList = await getAppListData(req.user);
+    res.json({ appList });
+  } catch (error) {
+    console.error(`Error fetching app list: ${error}`);
+    res.status(500).json({ message: 'Failed to fetch app list' });
+  }
+});
+
+// App list endpoint
+apiRouter.post('/app_info', verifyToken, async (req, res) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+
+  const { name, server, credentials } = req.body;
+  if (!name || !server || !credentials) {
+    return res.status(400).json({ message: 'Name, server and credentials required' });
+  }
+
+  try {
+    const accountInfo = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM account_info WHERE server_ip = ?', [server], (err, row) => {
+        if (err) reject(err);
+        resolve(row);
+      });
+    });
+
+    if (accountInfo) {
+      return res.status(400).json({ message: 'Account info with this server ip already exists' });
+    }
+
+    const normalized = normalizeCredentials(credentials);
+    await new Promise((resolve, reject) => {
+      db.run('INSERT INTO account_info (name, server_ip, credentials) VALUES (?, ?, ?)', [name, server, JSON.stringify(normalized)], (err) => {
+        if (err) reject(err);
+        resolve();
+      });
+    });
+    const accountInfos = await new Promise((resolve, reject) => {
+      db.all('SELECT id, name, server_ip, credentials, created_at, updated_at FROM account_info', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
+    });
+    res.status(201).json({ message: 'Server added successfully', accountInfos });
+  } catch (error) {
+    console.error('Add account info error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// App list endpoint – update credentials for an account (body: title or name, server_ip, credentials)
+apiRouter.put('/app_info', verifyToken, async (req, res) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+
+  const { name, title, server_ip, credentials } = req.body;
+  const accountName = name || (title ? hashId(title) : null);
+
+  if (!accountName || !server_ip || !Array.isArray(credentials)) {
+    return res.status(400).json({ message: 'title (or name), server_ip and credentials array required' });
+  }
+
+  try {
+    const normalized = normalizeCredentials(credentials);
+    const existing = await new Promise((resolve, reject) => {
+      db.get('SELECT id FROM account_info WHERE name = ? AND server_ip = ?', [accountName, server_ip], (err, row) => {
+        if (err) reject(err);
+        resolve(row);
+      });
+    });
+    if (existing) {
+      await new Promise((resolve, reject) => {
+        db.run(
+          'UPDATE account_info SET credentials = ? WHERE name = ? AND server_ip = ?',
+          [JSON.stringify(normalized), accountName, server_ip],
+          (err) => {
+            if (err) reject(err);
+            resolve();
+          }
+        );
+      });
+    } else {
+      await new Promise((resolve, reject) => {
+        db.run(
+          'INSERT INTO account_info (name, server_ip, credentials) VALUES (?, ?, ?)',
+          [accountName, server_ip, JSON.stringify(normalized)],
+          (err) => {
+            if (err) reject(err);
+            resolve();
+          }
+        );
+      });
+    }
+
+    const appList = await getAppListData(req.user);
+    res.json({ message: 'Account info updated successfully', appList });
+  } catch (error) {
+    console.error('Update account info error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// App list endpoint – delete entire account_info row (body: title or name, server_ip)
+apiRouter.delete('/app_info', verifyToken, async (req, res) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+
+  const { name, title, server_ip } = req.body;
+  const accountName = name || (title ? hashId(title) : null);
+
+  if (!accountName || !server_ip) {
+    return res.status(400).json({ message: 'title (or name) and server_ip required' });
+  }
+
+  try {
+    await new Promise((resolve, reject) => {
+      db.run('DELETE FROM account_info WHERE name = ? AND server_ip = ?', [accountName, server_ip], (err) => {
+        if (err) reject(err);
+        resolve();
+      });
+    });
+
+    const appList = await getAppListData(req.user);
+    res.json({ message: 'Account info deleted successfully', appList });
+  } catch (error) {
+    console.error('Delete account info error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 });
 
 // Error handling middleware

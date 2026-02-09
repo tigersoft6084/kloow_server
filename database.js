@@ -181,7 +181,26 @@ db.serialize(() => {
         console.log('Frog_version table initialized');
       }
     }
-  )
+  );
+
+  db.run(
+    `
+      CREATE TABLE IF NOT EXISTS account_info (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        server_ip TEXT NOT NULL UNIQUE,
+        credentials TEXT DEFAULT "[]",
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    (err) => {
+      if (err) {
+        console.error('Error creating account_info table:', err.message);
+      } else {
+        console.error('account_info table initialized');
+      }
+    }
+  );
 });
 
 module.exports = db;
