@@ -856,7 +856,7 @@ apiRouter.post('/set', async (req, res) => {
   const name = title.toLowerCase();
 
   try {
-    const targetUrl = `http://5.161.87.62:3000/set-seocromom-params?name=${name}&old_user=${old_username ?? ""}&new_user=${new_username ?? ""}`;
+    const targetUrl = `http://${server_ip}:3000/set-seocromom-params?name=${name}&old_user=${old_username ?? ""}&new_user=${new_username ?? ""}`;
 
     const bodyParams = {}
     bodyParams[`${name}Username`] = new_username ?? "";
