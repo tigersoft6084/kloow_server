@@ -3,6 +3,8 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const { execFile } = require('child_process');
+const util = require('util');
 const db = require('./database');
 const multer = require('multer');
 const path = require('path');
@@ -12,6 +14,7 @@ const { verifyToken, hashId, JWT_SECRET, JWT_REFRESH_SECRET } = require('./commo
 
 const app = express();
 const PORT = 8001;
+const execFileAsync = util.promisify(execFile);
 
 // Middleware
 app.use(bodyParser.json({ limit: '10mb' })); // Limit payload size for security
@@ -841,6 +844,137 @@ apiRouter.delete('/app_info', verifyToken, async (req, res) => {
   } catch (error) {
     console.error('Delete account info error:', error);
     res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Run app endpoint
+apiRouter.post('/run_app', verifyToken, async (req, res) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+
+  try {
+    const { id, url, proxyServer } = req.body;
+    const { username } = req.user;
+    const tokenValue = url ? url.split("?")[1] : "";
+    const freshUrl = `${url}&fresh=1`;
+
+    const existing = await new Promise((resolve, reject) => {
+      db.get(
+        'SELECT * FROM containers WHERE username = ? and project_id = ? and port != ?',
+        [hashId(username), id, 0],
+        (err, row) => (err ? reject(err) : resolve(row))
+      );
+    });
+
+    if (existing) {
+      return res.status(500).json({ message: 'This application is already running.' });
+    }
+
+    const containers = await new Promise((resolve, reject) => {
+      db.all('SELECT port FROM containers where port != 0', [], (err, rows) => {
+        if (err) reject(err);
+        resolve(rows);
+      });
+    });
+
+    const usedPorts = new Set(containers.map((row) => row.port));
+
+    let freePort = null;
+    for (let port = 10000; port <= 10500; port++) {
+      if (!usedPorts.has(port)) {
+        freePort = port;
+        break;
+      }
+    }
+
+    if (!freePort) {
+      return res.status(500).json({ message: 'No available ports in range.' });
+    }
+
+    let runStdout;
+    try {
+      const { stdout } = await execFileAsync('./kasm/run.sh', [
+        `${hashId(username)}-${id}`,
+        freshUrl,
+        `http://${proxyServer}:3000`,
+        String(freePort),
+        tokenValue
+      ]);
+      runStdout = stdout.trim();
+    } catch (err) {
+      console.error(`Error running container: ${err.message}`);
+      return res.status(500).json({ message: `Error running container: ${err.message}` });
+    }
+
+    const maybeRow = await new Promise((resolve, reject) => {
+      db.get(
+        'SELECT * FROM containers WHERE username = ? and project_id = ? and port = ?',
+        [hashId(username), id, 0],
+        (err, row) => (err ? reject(err) : resolve(row))
+      );
+    });
+
+    if (maybeRow) {
+      await new Promise((resolve, reject) => {
+        db.run('UPDATE containers SET container_id = ?, port = ? WHERE id = ?', [runStdout, freePort, maybeRow.id], (err) =>
+          err ? reject(err) : resolve()
+        );
+      });
+    } else {
+      await new Promise((resolve, reject) => {
+        db.run(
+          'INSERT INTO containers (username, project_id, container_id, port) VALUES (?, ?, ?, ?)',
+          [hashId(username), id, runStdout, freePort],
+          (err) => (err ? reject(err) : resolve())
+        );
+      });
+    }
+
+    return res.json({ success: true, freePort });
+  } catch (error) {
+    console.error(`Error run app: ${error.message}`);
+    return res.status(500).json({ message: 'Failed to run app' });
+  }
+});
+
+// Stop app endpoint
+apiRouter.post('/stop_app', verifyToken, async (req, res) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+
+  try {
+    const { id } = req.body;
+    const { username } = req.user;
+
+    const row = await new Promise((resolve, reject) => {
+      db.get(
+        'SELECT * FROM containers WHERE username = ? and project_id = ? and port != ?',
+        [hashId(username), id, 0],
+        (err, row) => (err ? reject(err) : resolve(row))
+      );
+    });
+
+    if (!row) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+
+    try {
+      await execFileAsync('./kasm/stop.sh', [row.container_id]);
+    } catch (err) {
+      console.error(`Error stopping app: ${err.message}`);
+      return res.status(500).json({ message: `Error stopping app: ${err.message}` });
+    }
+
+    await new Promise((resolve, reject) => {
+      db.run('UPDATE containers SET port = ? WHERE id = ?', [0, row.id], (err) => (err ? reject(err) : resolve()));
+    });
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error(`Error stop app: ${error.message}`);
+    return res.status(500).json({ message: 'Failed to stop app' });
   }
 });
 
