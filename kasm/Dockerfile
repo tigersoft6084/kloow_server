@@ -24,6 +24,8 @@ RUN apt-get remove -y xfce4-panel
 COPY ./misc/single_app_security.sh $INST_SCRIPTS/misc/
 RUN  bash $INST_SCRIPTS/misc/single_app_security.sh -t && rm -rf $INST_SCRIPTS/misc/
 COPY ./common/urlblocklist.json /etc/opt/chrome/policies/managed/urlblocklist.json
+COPY ./extension /opt/proxylogin/extension
+RUN chown -R 1000:0 /opt/proxylogin/extension
 
 # Setup the custom startup script that will be invoked when the container starts
 #ENV LAUNCH_URL  http://kasmweb.com

@@ -4,12 +4,67 @@ START_COMMAND="google-chrome"
 PGREP="chrome"
 MAXIMIZE="true"
 DEFAULT_ARGS=""
+EXTENSION_ARGS=""
+EXTENSION_SRC_DIR="${EXTENSION_SRC_DIR:-/opt/proxylogin/extension}"
+EXTENSION_WORK_DIR="${EXTENSION_WORK_DIR:-/tmp/proxylogin-extension}"
+EXTENSION_COMPAT_FLAG="${EXTENSION_COMPAT_FLAG:---disable-features=DisableLoadExtensionCommandLineSwitch}"
 
-#if [[ $MAXIMIZE == 'true' ]] ; then
-DEFAULT_ARGS+=" --start-maximized --proxy-server=$PROXY_URL"
-# "
-#fi
-ARGS=${APP_ARGS:-$DEFAULT_ARGS}
+has_switch() {
+    case " $1 " in
+        *" --$2="*|*" --$2 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+prepare_extension() {
+    if [ ! -d "$EXTENSION_SRC_DIR" ] ; then
+        echo "Extension directory not found: $EXTENSION_SRC_DIR"
+        return
+    fi
+
+    rm -rf "$EXTENSION_WORK_DIR"
+    mkdir -p "$EXTENSION_WORK_DIR"
+    cp -a "$EXTENSION_SRC_DIR/." "$EXTENSION_WORK_DIR/"
+
+    if [ -f "$EXTENSION_WORK_DIR/rules.json" ] ; then
+        token_escaped=$(printf '%s' "${SEOCROMOM_TOKEN:-}" | sed 's/[\\/&]/\\&/g')
+        sed -i "s/SEOCROMOM_TOKEN/${token_escaped}/g" "$EXTENSION_WORK_DIR/rules.json"
+    fi
+
+    extension_list="$EXTENSION_WORK_DIR"
+    EXTENSION_ARGS=" --load-extension=$extension_list"
+    EXTENSION_ARGS=" --disable-extensions-except=$extension_list$EXTENSION_ARGS"
+}
+
+prepare_extension
+DEFAULT_ARGS+=" --start-maximized"
+if [ -n "$PROXY_URL" ] ; then
+    DEFAULT_ARGS+=" --proxy-server=$PROXY_URL"
+fi
+if [ -n "$EXTENSION_ARGS" ] ; then
+    if [ -n "$EXTENSION_COMPAT_FLAG" ] ; then
+        DEFAULT_ARGS+=" $EXTENSION_COMPAT_FLAG"
+    fi
+    DEFAULT_ARGS+="$EXTENSION_ARGS"
+fi
+
+ARGS="$DEFAULT_ARGS"
+if [ -n "${APP_ARGS:-}" ] ; then
+    ARGS="$APP_ARGS"
+
+    if [ -n "$PROXY_URL" ] && ! has_switch "$ARGS" "proxy-server" ; then
+        ARGS+=" --proxy-server=$PROXY_URL"
+    fi
+
+    if [ -n "$EXTENSION_ARGS" ] ; then
+        if [ -n "$EXTENSION_COMPAT_FLAG" ] && ! has_switch "$ARGS" "disable-features" ; then
+            ARGS+=" $EXTENSION_COMPAT_FLAG"
+        fi
+        if ! has_switch "$ARGS" "load-extension" ; then
+            ARGS+="$EXTENSION_ARGS"
+        fi
+    fi
+fi
 
 options=$(getopt -o gau: -l go,assign,url: -n "$0" -- "$@") || exit
 eval set -- "$options"

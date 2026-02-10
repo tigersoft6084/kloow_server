@@ -1,14 +1,14 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const jwt = require('jsonwebtoken');
 const util = require('util');
 
 const db = require('./database');
 const { verifyToken, fetchUserData, hashId, JWT_SECRET, JWT_REFRESH_SECRET } = require('./common');
 
-const execAsync = util.promisify(exec);
+const execFileAsync = util.promisify(execFile);
 const app = express();
 const PORT = 3001;
 
@@ -396,6 +396,8 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
   try {
     const { id, url, proxyServer } = req.body;
     const { username } = req.user;
+    const tokenValue = url ? url.split("?")[1] : "";
+
     // check for an already running container
     const existing = await new Promise((resolve, reject) => {
       db.get(
@@ -438,8 +440,13 @@ apiRouter.post('/run_app', verifyToken, async (req, res) => {
     let runStdout;
 
     try {
-      const cmd = [`${hashId(username)}-${id}`, `"${url}"`, `http://${proxyServer}:3000`, freePort].join(' ');
-      const { stdout } = await execAsync(`./kasm/run.sh ${cmd}`);
+      const { stdout } = await execFileAsync('./kasm/run.sh', [
+        `${hashId(username)}-${id}`,
+        url,
+        `http://${proxyServer}:3000`,
+        String(freePort),
+        tokenValue
+      ]);
       runStdout = stdout.trim();
     } catch (err) {
       console.error(`Error running container: ${err.message}`);
@@ -504,7 +511,7 @@ apiRouter.post('/stop_app', verifyToken, async (req, res) => {
 
     // SECOND: stop the container
     try {
-      await execAsync(`./kasm/stop.sh ${row.container_id}`);
+      await execFileAsync('./kasm/stop.sh', [row.container_id]);
     } catch (err) {
       console.error(`Error stopping app: ${err.message}`);
       return res.status(500).json({ message: `Error stopping app: ${err.message}` });
